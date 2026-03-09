@@ -1,0 +1,23 @@
+
+# fcim-voice:1.0 - Single Docker image for FCIM Voice Stack
+FROM node:20-slim
+
+WORKDIR /app
+
+# Install dependencies for Whisper and Kokoro (WASM/Python dependencies if local)
+RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip && rm -rf /var/lib/apt/lists/*
+
+# Install Kokoro TTS (placeholder for local integration)
+# RUN pip3 install kokoro-tts --break-system-packages
+
+COPY package*.json ./
+RUN npm install
+
+COPY . .
+RUN npm run build
+
+# Export Prometheus metrics (e.g., via prom-client in NestJS)
+# whisper_latency_ms, llama_parse_success_rate, kokoro_tts_latency_ms
+
+EXPOSE 3000
+CMD ["npm", "run", "start:prod"]

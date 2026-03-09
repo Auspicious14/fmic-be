@@ -1,0 +1,29 @@
+
+apiVersion: v2
+name: fcim-voice
+description: A Helm chart for FCIM voice system
+
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+
+# Horizontal Pod Autoscaler based on 95th-percentile latency > 1.2s
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+    # Placeholder for latency-based autoscaling (requires Prometheus adapter)
+    # - type: Object
+    #   object:
+    #     metric:
+    #       name: fcim_p95_latency_ms
+    #     target:
+    #       type: Value
+    #       value: 1200
