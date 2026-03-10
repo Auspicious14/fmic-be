@@ -4,6 +4,7 @@ import {
   Post,
   Body,
   Patch,
+  Delete,
   Param,
   UseGuards,
   Query,
@@ -15,7 +16,11 @@ import {
   ApiBearerAuth,
 } from '@nestjs/swagger';
 import { CustomersService } from './customers.service';
-import { CreateCustomerDto, UpdateCustomerDto } from './dto/customer.dto';
+import {
+  CreateCustomerDto,
+  UpdateCustomerDto,
+  DeleteCustomerDto,
+} from './dto/customer.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { GetUser } from '../../common/decorators/get-user.decorator';
 
@@ -61,5 +66,16 @@ export class CustomersController {
     @GetUser() user: any,
   ) {
     return this.customersService.update(id, updateCustomerDto, user.userId);
+  }
+
+  @Delete(':id')
+  @ApiOperation({ summary: 'Soft-delete a customer (keeps audit trail)' })
+  @ApiResponse({ status: 200, description: 'Customer soft-deleted' })
+  async delete(
+    @Param('id') id: string,
+    @Body() deleteDto: DeleteCustomerDto,
+    @GetUser() user: any,
+  ) {
+    return this.customersService.softDelete(id, user.userId, deleteDto);
   }
 }

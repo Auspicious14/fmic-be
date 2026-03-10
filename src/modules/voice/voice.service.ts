@@ -1,10 +1,13 @@
-
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ProcessVoiceDto } from './dto/voice.dto';
 import { CustomersService } from '../customers/customers.service';
 import { ProductsService } from '../products/products.service';
-import { VoiceOutputDto, VoiceTransactionData, VoiceIntent } from './dto/voice-output.dto';
+import {
+  VoiceOutputDto,
+  VoiceTransactionData,
+  VoiceIntent,
+} from './dto/voice-output.dto';
 import { TransactionsService } from '../transactions/transactions.service';
 import { GroqService } from './services/groq.service';
 import { KokoroService } from './services/kokoro.service';
@@ -53,9 +56,10 @@ export class VoiceService {
 
     // 1. Gather Context
     const products = await this.productsService.findAll(userId);
-    
+
     // 2. NLU with Groq Llama 3.3 70B - Now returns multiple transactions
-    const llamaResult = await this.groqService.extractStructuredData(transcript);
+    const llamaResult =
+      await this.groqService.extractStructuredData(transcript);
     const rawTransactions = llamaResult.transactions || [];
 
     const processedTransactions: VoiceTransactionData[] = [];
@@ -64,15 +68,19 @@ export class VoiceService {
       // 3. Handle DAILY_SUMMARY intent separately
       if (rawTx.intent === VoiceIntent.DAILY_SUMMARY) {
         const summary = await this.transactionsService.getDailySummary(userId);
-        const creditTotal = summary.find((s: any) => s._id === 'credit')?.total || 0;
-        const paymentTotal = summary.find((s: any) => s._id === 'payment')?.total || 0;
-        const creditCount = summary.find((s: any) => s._id === 'credit')?.count || 0;
+        const creditTotal = summary.totalCredit || 0;
+        const paymentTotal = summary.totalRevenue || 0;
+        const creditCount = summary.totalCreditCount || 0;
 
         const summaryText = `Today summary: total debt added na ${creditTotal} naira for ${creditCount} customers. Total payments received na ${paymentTotal} naira.`;
 
         processedTransactions.push({
           intent: VoiceIntent.DAILY_SUMMARY,
-          resolvedCustomer: { name: 'Shop Owner', isNew: false, isAmbiguous: false },
+          resolvedCustomer: {
+            name: 'Shop Owner',
+            isNew: false,
+            isAmbiguous: false,
+          },
           items: [],
           total_amount: creditTotal - paymentTotal,
           transaction_type: 'summary',
@@ -92,11 +100,16 @@ export class VoiceService {
 
       const itemsWithIds = (rawTx.data.items || []).map((item: any) => {
         const itemName = item.name?.toLowerCase().trim() || '';
-        const itemWords = itemName.split(/\s+/).filter((w: string) => w.length > 2);
+        const itemWords = itemName
+          .split(/\s+/)
+          .filter((w: string) => w.length > 2);
 
-        const matchedProduct = products.find(p => {
+        const matchedProduct = products.find((p) => {
           const productName = p.name.toLowerCase();
-          if (itemName && (productName.includes(itemName) || itemName.includes(productName))) {
+          if (
+            itemName &&
+            (productName.includes(itemName) || itemName.includes(productName))
+          ) {
             return true;
           }
           if (itemWords.length > 0) {
@@ -114,10 +127,12 @@ export class VoiceService {
       });
 
       // 5. Generate Voice Confirmation
-      let confirmationText = "I have recorded the transaction.";
-      const customerDisplayName = resolvedCustomer.name + (resolvedCustomer.tag ? ` (${resolvedCustomer.tag})` : '');
+      let confirmationText = 'I have recorded the transaction.';
+      const customerDisplayName =
+        resolvedCustomer.name +
+        (resolvedCustomer.tag ? ` (${resolvedCustomer.tag})` : '');
       const transactionAmount = rawTx.data.amount || 0;
-      
+
       if (rawTx.intent === VoiceIntent.CREDIT_SALE) {
         confirmationText = `Debt don add for ${customerDisplayName}. Total na ${transactionAmount} naira.`;
       } else if (rawTx.intent === VoiceIntent.PAYMENT) {

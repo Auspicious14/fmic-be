@@ -62,6 +62,12 @@ export class AuthService {
   }
 
   async validateUser(payload: any) {
-    return await this.userModel.findById(payload.sub);
+    const user = await this.userModel.findById(payload.sub);
+    console.log({ user });
+    return user;
+  }
+
+  async findAll() {
+    return this.userModel.find().exec();
   }
 }

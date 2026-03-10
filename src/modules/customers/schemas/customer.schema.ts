@@ -17,6 +17,12 @@ export class Customer {
   @Prop()
   phone: string;
 
+  @Prop()
+  email: string;
+
+  @Prop()
+  address: string;
+
   @Prop({ default: 0 })
   outstandingBalance: number;
 
@@ -29,10 +35,21 @@ export class Customer {
   @Prop()
   notes: string;
 
+  @Prop({ default: false })
+  isDeleted: boolean;
+
+  @Prop()
+  deletedAt: Date;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   shopOwner: MongooseSchema.Types.ObjectId;
 }
 
 export const CustomerSchema = SchemaFactory.createForClass(Customer);
 
-CustomerSchema.index({ name: 'text', tag: 'text', aliases: 'text', phone: 'text' });
+CustomerSchema.index({
+  name: 'text',
+  tag: 'text',
+  aliases: 'text',
+  phone: 'text',
+});
