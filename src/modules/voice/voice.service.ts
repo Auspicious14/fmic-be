@@ -12,6 +12,7 @@ import { TransactionsService } from '../transactions/transactions.service';
 import { GroqService } from './services/groq.service';
 import { KokoroService } from './services/kokoro.service';
 import { CustomerResolverService } from '../customers/customer-resolver.service';
+import { LanguageDetectionService } from './services/language-detection.service';
 
 @Injectable()
 export class VoiceService {
@@ -25,6 +26,7 @@ export class VoiceService {
     private groqService: GroqService,
     private kokoroService: KokoroService,
     private customerResolverService: CustomerResolverService,
+    private languageDetectionService: LanguageDetectionService,
   ) {}
 
   async processAudio(
@@ -32,18 +34,43 @@ export class VoiceService {
     userId: string,
   ): Promise<VoiceOutputDto> {
     try {
-      // 1. STT with Groq Whisper large-v3
-      const { text: transcript } = await this.groqService.transcribe(
-        file.buffer,
-        file.mimetype,
+      const detectionResult = await this.languageDetectionService.detectLanguage(
+        file.buffer, file.mimetype,
       );
+      this.logger.debug(`Language detection result: ${JSON.stringify(detectionResult)}`);
 
-      return this.processTranscript({ transcript }, userId);
-    } catch (error) {
-      this.logger.error(
-        'Audio processing pipeline failed:',
-        (error as Error).message,
+      const language = detectionResult.language;
+      const transcriptionLanguage: 'yo' | 'en' = language === 'en' ? 'en' : 'yo';
+
+      const { text: transcript } = await this.groqService.transcribe(
+        file.buffer, file.mimetype, transcriptionLanguage,
       );
+      this.logger.log(`[VoiceService] lang=${transcriptionLanguage} transcript="${transcript}"`);
+
+      const result = await this.processTranscript({ transcript }, userId);
+
+      // Generate TTS audio for the first transaction's confirmation
+      // so the frontend can play it back immediately
+      const confirmationText = result.transactions[0]?.voice_confirmation ?? '';
+      const ttsLang = transcriptionLanguage === 'yo' ? 'yo-NG' : 'pcm-NG';
+
+      let confirmationAudio: string | null = null;
+      if (confirmationText) {
+        try {
+          confirmationAudio = await this.kokoroService.generateTTS(confirmationText, ttsLang);
+        } catch (ttsError) {
+          // TTS failure should NOT fail the whole transaction — log and continue
+          this.logger.warn(`[VoiceService] TTS failed: ${(ttsError as Error).message}`);
+        }
+      }
+
+      return {
+        ...result,
+        detectedLanguage: detectionResult.language,
+        confirmationAudio, // base64 WAV — null if TTS failed
+      };
+    } catch (error) {
+      this.logger.error('Audio processing pipeline failed:', (error as Error).message);
       throw error;
     }
   }
@@ -66,29 +93,50 @@ export class VoiceService {
 
     for (const rawTx of rawTransactions) {
       // 3. Handle DAILY_SUMMARY intent separately
-      if (rawTx.intent === VoiceIntent.DAILY_SUMMARY) {
-        const summary = await this.transactionsService.getDailySummary(userId);
-        const creditTotal = summary.totalCredit || 0;
-        const paymentTotal = summary.totalRevenue || 0;
-        const creditCount = summary.totalCreditCount || 0;
+      // if (rawTx.intent === VoiceIntent.DAILY_SUMMARY) {
+      //   const summary = await this.transactionsService.getDailySummary(userId);
+      //   const creditTotal = summary.totalCredit || 0;
+      //   const paymentTotal = summary.totalRevenue || 0;
+      //   const creditCount = summary.totalCreditCount || 0;
 
-        const summaryText = `Today summary: total debt added na ${creditTotal} naira for ${creditCount} customers. Total payments received na ${paymentTotal} naira.`;
+      //   const summaryText = `Today summary: total debt added na ${creditTotal} naira for ${creditCount} customers. Total payments received na ${paymentTotal} naira.`;
 
+      //   processedTransactions.push({
+      //     intent: VoiceIntent.DAILY_SUMMARY,
+      //     resolvedCustomer: {
+      //       name: 'Shop Owner',
+      //       isNew: false,
+      //       isAmbiguous: false,
+      //     },
+      //     items: [],
+      //     total_amount: creditTotal - paymentTotal,
+      //     transaction_type: 'summary',
+      //     confidence_score: rawTx.confidence_score,
+      //     reasoning_summary: rawTx.reasoning_summary,
+      //     voice_confirmation: summaryText,
+      //   });
+      //   continue;
+      // }
+
+      if (!rawTx.data?.debtor && rawTx.intent !== VoiceIntent.DAILY_SUMMARY) {
+        this.logger.warn(
+          `[VoiceService] No debtor extracted from transcript: "${transcript}"`,
+        );
         processedTransactions.push({
-          intent: VoiceIntent.DAILY_SUMMARY,
+          intent: VoiceIntent.UNCLEAR,
           resolvedCustomer: {
-            name: 'Shop Owner',
+            name: 'Unknown',
             isNew: false,
-            isAmbiguous: false,
+            isAmbiguous: true,
           },
           items: [],
-          total_amount: creditTotal - paymentTotal,
-          transaction_type: 'summary',
-          confidence_score: rawTx.confidence_score,
-          reasoning_summary: rawTx.reasoning_summary,
-          voice_confirmation: summaryText,
+          total_amount: 0,
+          transaction_type: 'unclear',
+          confidence_score: 0,
+          reasoning_summary: 'Could not extract customer name from transcript',
+          voice_confirmation: 'I no understand well well. Abeg talk am again.',
         });
-        continue;
+        continue; // skip to next transaction, don't crash
       }
 
       // 4. Customer Resolution Pipeline

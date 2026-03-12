@@ -1,5 +1,6 @@
 
 import { ApiProperty } from '@nestjs/swagger';
+import { IsOptional, IsString } from 'class-validator';
 
 export enum VoiceIntent {
   CREDIT_SALE = 'CREDIT_SALE',
@@ -8,6 +9,7 @@ export enum VoiceIntent {
   PRODUCT_PRICE_UPDATE = 'PRODUCT_PRICE_UPDATE',
   DAILY_SUMMARY = 'DAILY_SUMMARY',
   UNKNOWN = 'UNKNOWN',
+  UNCLEAR = 'UNCLEAR',
 }
 
 export class ResolvedCustomerDto {
@@ -74,6 +76,16 @@ export class VoiceTransactionData {
 }
 
 export class VoiceOutputDto {
+  @ApiProperty({ example: 'yo' })
+  @IsOptional()
+  @IsString()
+  detectedLanguage?: 'yo' | 'en' | 'mixed';
+
+  @IsOptional()
+  @IsString()
+  @ApiProperty({ example: 'credit' })
+  confirmationAudio?: string | null;
+
   @ApiProperty({ type: [VoiceTransactionData] })
   transactions: VoiceTransactionData[];
 
