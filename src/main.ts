@@ -1,10 +1,11 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe, Logger } from '@nestjs/common';
-import { SwaggerModule, DocumentBuilder,  } from '@nestjs/swagger';
+import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import compression from 'compression';
-const CSS_URL = "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.1.0/swagger-ui.min.css";
+const CSS_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.1.0/swagger-ui.min.css';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -13,7 +14,15 @@ async function bootstrap() {
 
   // Security
   app.use(helmet());
-  app.enableCors();
+  app.enableCors({
+    origin: [
+      'http://localhost:3000',
+      'https://fcim-be.vercel.app',
+      'https://fmic-be-git-feat-voice-pipeline-auspicious14s-projects.vercel.app',
+    ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  });
   app.use(compression());
 
   // Validation
@@ -40,9 +49,6 @@ async function bootstrap() {
       'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.1.0/swagger-ui-standalone-preset.js',
     ],
     customCss: '.swagger-ui .topbar { display: none }',
-  });
-  SwaggerModule.setup('api/docs', app, document, {
-    customCssUrl: CSS_URL,
   });
 
   const port = process.env.PORT || 3000;
