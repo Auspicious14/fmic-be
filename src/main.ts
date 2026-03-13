@@ -17,8 +17,7 @@ async function bootstrap() {
   app.enableCors({
     origin: [
       'http://localhost:3000',
-      'https://fcim-be.vercel.app',
-      'https://fmic-be-git-feat-voice-pipeline-auspicious14s-projects.vercel.app',
+      'https://fcim-fe.vercel.app',
     ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
