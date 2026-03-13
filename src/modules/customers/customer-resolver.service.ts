@@ -31,6 +31,10 @@ export class CustomerResolverService {
     const normalizedSearchName = name.toLowerCase().trim();
     const normalizedSearchTag = descriptor?.toLowerCase().trim();
 
+    if (!normalizedSearchName) {
+      return { name, tag: descriptor, isNew: true, isAmbiguous: false };
+    }
+
     // 1. Exact Name Match
     const exactMatch = customers.find(
       (c) => c.name.toLowerCase() === normalizedSearchName,

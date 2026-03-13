@@ -1,4 +1,3 @@
-
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Groq from 'groq-sdk';
@@ -11,43 +10,128 @@ export class GroqService {
   private groq: Groq;
   private redis: Redis;
 
+  private mimeToExt(mimeType: string): string {
+    const map: Record<string, string> = {
+      'audio/webm': '.webm',
+      'audio/ogg': '.ogg',
+      'audio/wav': '.wav',
+      'audio/mpeg': '.mp3',
+      'audio/mp4': '.mp4',
+      'video/webm': '.webm',
+    };
+    return map[mimeType] ?? '.webm';
+  }
+
   constructor(private configService: ConfigService) {
     this.groq = new Groq({
       apiKey: this.configService.get<string>('GROQ_API_KEY'),
     });
-    this.redis = new Redis(this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379');
+    this.redis = new Redis(
+      this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
+    );
   }
 
-  async transcribe(file: Buffer, mimeType: string): Promise<{ text: string; confidence: number }> {
+  // async transcribe(file: Buffer, mimeType: string, language?: 'yo' | 'en'): Promise<{ text: string; confidence: number, language?: string }> {
+  //   try {
+  //     const fileSizeMB = file.length / (1024 * 1024);
+  //     // this.logger.log(`Transcribing audio with Groq Whisper large-v3 [${mimeType}] - Size: ${fileSizeMB.toFixed(2)} MB`);
+
+  //     if (fileSizeMB > 25) {
+  //       throw new Error(`Audio file too large (${fileSizeMB.toFixed(2)} MB). Max size is 25MB.`);
+  //     }
+
+  //     if (language === 'yo') {
+  //       console.log('using yoruba ASR endpoint...')
+  //       const formData = new FormData();
+  //       formData.append('audio', new Blob([new Uint8Array(file)], { type: mimeType }), 'audio.webm');
+
+  //       const response = await fetch(String(process.env.YORUBA_ASR_URL), {
+  //         method: 'POST',
+  //         body: formData,
+  //       });
+
+  //       if (!response.ok) {
+  //         throw new Error(`Yoruba ASR failed: ${response.status}`);
+  //       }
+
+  //       const result = await response.json();
+  //       return { text: result.text, confidence: result.confidence };
+  //     }
+
+  //     // Use groq.toFile for proper multipart encoding of Buffers in Node.js
+  //     const fileObj = await Groq.toFile(file, 'audio.webm', { type: mimeType });
+
+  //     const response = await this.groq.audio.transcriptions.create({
+  //   file: fileObj,
+  //   model: 'whisper-large-v3',
+  //   response_format: 'verbose_json',
+  //   ...(language ? { language } : {}),
+  // });
+
+  // const text = response.text;
+  // const confidence = (response as any).confidence ?? 0.8;
+  // const detectedLang = (response as any).language ?? 'unknown'; // ← grab it here
+
+  // this.logger.log(`[ASR] model used: Groq Whisper | detected: ${detectedLang}`);
+  // return { text, confidence, language: detectedLang }; // ← pass it through
+  //   } catch (error) {
+  //     this.logger.error('Groq Whisper STT failed:', (error as Error).message);
+  //     throw error;
+  //   }
+  // }
+
+  async transcribe(
+    file: Buffer,
+    mimeType: string,
+    language?: 'yo' | 'en',
+  ): Promise<{ text: string; confidence: number; language: string }> {
+    const endpoint =
+      language === 'yo'
+        ? `${process.env.HF_SPACE_URL}/asr/yoruba`
+        : `${process.env.HF_SPACE_URL}/asr/english`;
+
+    const formData = new FormData();
+    formData.append(
+      'audio',
+      new Blob([new Uint8Array(file)], { type: mimeType }), // ← type was missing
+      `audio${this.mimeToExt(mimeType)}`,
+    );
+    formData.append('mime_type', mimeType);
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('ASR timeout after 15s')), 15000),
+    );
+
     try {
-      const fileSizeMB = file.length / (1024 * 1024);
-      this.logger.log(`Transcribing audio with Groq Whisper large-v3 [${mimeType}] - Size: ${fileSizeMB.toFixed(2)} MB`);
-      
-      if (fileSizeMB > 25) {
-        throw new Error(`Audio file too large (${fileSizeMB.toFixed(2)} MB). Max size is 25MB.`);
+      const response = (await Promise.race([
+        fetch(endpoint, {
+          method: 'POST',
+          body: formData,
+        }),
+        timeoutPromise,
+      ])) as Response;
+
+      if (!response.ok) {
+        this.logger.error(
+          `[ASR] HuggingFace endpoint error: ${response.status}`,
+        );
+        throw new Error(`ASR endpoint returned ${response.status}`);
       }
 
-      // Use groq.toFile for proper multipart encoding of Buffers in Node.js
-      const fileObj = await Groq.toFile(file, 'audio.webm', { type: mimeType });
+      const result = await response.json();
+      this.logger.log(
+        `[ASR] model=${result.model} | lang=${language ?? 'en'} | transcript="${result.text}"`,
+      );
 
-      const response = await this.groq.audio.transcriptions.create({
-        file: fileObj,
-        model: 'whisper-large-v3',
-        response_format: 'verbose_json',
-        language: 'en', // Nigerian English/Pidgin are best handled as English or detected
-      });
-
-      let text = response.text;
-      let confidence = (response as any).confidence || 0.8; // Fallback confidence if not provided
-
-      // Automatic language detection for Nigerian context
-      if (confidence < 0.75) {
-        this.logger.warn(`Confidence ${confidence} below threshold 0.75, falling back to en-NG context.`);
-      }
-
-      return { text, confidence };
+      return {
+        text: result.text,
+        confidence: result.confidence ?? 0.8,
+        language: language ?? 'en',
+      };
     } catch (error) {
-      this.logger.error('Groq Whisper STT failed:', (error as Error).message);
+      this.logger.error(
+        `[ASR] Transcription failed: ${(error as Error).message}`,
+      );
       throw error;
     }
   }
@@ -80,7 +164,10 @@ export class GroqService {
         return result;
       } catch (error) {
         attempts++;
-        this.logger.error(`Groq Llama NLU failed (attempt ${attempts}):`, (error as Error).message);
+        this.logger.error(
+          `Groq Llama NLU failed (attempt ${attempts}):`,
+          (error as Error).message,
+        );
         if (attempts >= maxAttempts) throw error;
         const delay = Math.pow(2, attempts) * 1000;
         await new Promise((resolve) => setTimeout(resolve, delay));

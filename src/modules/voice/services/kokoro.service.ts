@@ -1,4 +1,3 @@
-
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
@@ -33,48 +32,77 @@ export class KokoroService {
    * Priority: Pre-generated -> Redis Cache -> Real-time Generation
    */
   async generateTTS(text: string, lang: string = 'pcm-NG'): Promise<string> {
+    if (lang === 'yo-NG') {
+      return this.generateYorubaTTS(text);
+    }
+
     if (!text) {
       throw new HttpException('Text is required for TTS', HttpStatus.BAD_REQUEST);
     }
 
     try {
-      this.logger.log(`Processing TTS for: "${text}" [${lang}]`);
+      this.logger.log(`[TTS] engine=Kokoro | lang=${lang} | text="${text.substring(0, 50)}"`);
 
-      // 1. Check for pre-generated phrases (CDN/Local storage)
-      if (this.PRE_GENERATED_PHRASES[text]) {
-        const fileName = this.PRE_GENERATED_PHRASES[text];
-        this.logger.log(`Matched pre-generated phrase: ${fileName}`);
+      if (lang === 'yo-NG') {
         try {
-          return await this.fetchFromCDN(fileName);
-        } catch (cdnError) {
-          this.logger.warn(`Failed to fetch from CDN, falling back to dynamic generation: ${cdnError.message}`);
+          const response = await this.axiosInstance.post('/tts', null, {
+            params: { text, lang },
+          });
+
+          if (response.status !== 200) {
+            throw new Error(`Yoruba TTS failed with status: ${response.status}`);
+          }
+
+          return response.data.audio; // Base64 WAV
+        } catch (error) {
+          this.logger.error(`Yoruba TTS error: ${error.message}`);
+          throw new HttpException('Yoruba TTS failed', HttpStatus.INTERNAL_SERVER_ERROR);
         }
       }
 
-      // 2. Check Redis cache for dynamic phrases
-      const cacheKey = `tts:${Buffer.from(`${text}:${lang}`).toString('base64')}`;
-      const cachedAudio = await this.redis.get(cacheKey);
-      if (cachedAudio) {
-        this.logger.log('Returning cached TTS result.');
-        return cachedAudio;
-      }
-
-      // 3. Real-time generation via Kokoro service
-      const generatedAudio = await this.generateWithRetry(text, lang);
-      
-      // Cache the result for future use (24h TTL)
-      await this.redis.set(cacheKey, generatedAudio, 'EX', 86400);
-      
-      return generatedAudio;
+      // Existing Kokoro TTS logic
+      return await this.generateWithRetry(text, lang);
     } catch (error) {
       this.logger.error(`Kokoro TTS pipeline failed: ${error.message}`);
-      
-      // Final fallback: Return a silent or very basic error audio if everything fails
-      // In a production app, this might be a pre-cached "System Error" audio
       throw new HttpException(
         'Failed to generate voice response',
         HttpStatus.INTERNAL_SERVER_ERROR
       );
+    }
+  }
+
+  private async generateYorubaTTS(text: string): Promise<string> {
+    try {
+      this.logger.log(`[TTS] YarnGPT2b generating for: "${text.substring(0, 60)}..."`);
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+
+      const response = await fetch(
+        `${process.env.HF_SPACE_URL}/tts/yoruba`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+          signal: controller.signal,
+        }
+      );
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        throw new Error(`YarnGPT2b returned ${response.status}`);
+      }
+
+      const data = await response.json();
+      this.logger.log('[TTS] YarnGPT2b generation successful');
+      return data.audio; // base64 WAV
+
+    } catch (error) {
+      // Graceful fallback to Kokoro English — never leave user without audio
+      this.logger.warn(
+        `[TTS] YarnGPT2b failed (${(error as Error).message}), falling back to Kokoro`
+      );
+      return this.generateTTS(text, 'pcm-NG'); // recursive call with English lang
     }
   }
 

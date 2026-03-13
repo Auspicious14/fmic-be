@@ -23,6 +23,7 @@
   "dependencies": {
     "@aws-sdk/client-bedrock": "^3.1000.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1000.0",
+    "@huggingface/inference": "^4.13.15",
     "@nestjs-modules/mailer": "^2.0.2",
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.3",

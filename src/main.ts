@@ -4,6 +4,8 @@ import { ValidationPipe, Logger } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import compression from 'compression';
+const CSS_URL =
+  'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.1.0/swagger-ui.min.css';
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -11,8 +13,28 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   // Security
-  app.use(helmet());
-  app.enableCors();
+  app.use(
+    helmet({
+      crossOriginEmbedderPolicy: false,
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
+          scriptSrc: ["'self'", "https://cdnjs.cloudflare.com"],
+          imgSrc: ["'self'", "data:", "https:"],
+          connectSrc: ["'self'", "https://fmic-fe.vercel.app"],
+        },
+      },
+    }),
+  );
+  app.enableCors({
+    origin: [
+      'http://localhost:3000',
+      'https://fmic-fe.vercel.app',
+    ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  });
   app.use(compression());
 
   // Validation
@@ -32,7 +54,14 @@ async function bootstrap() {
     .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  SwaggerModule.setup('api/docs', app, document, {
+    customCssUrl: CSS_URL,
+    customJs: [
+      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.1.0/swagger-ui-bundle.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.1.0/swagger-ui-standalone-preset.js',
+    ],
+    customCss: '.swagger-ui .topbar { display: none }',
+  });
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

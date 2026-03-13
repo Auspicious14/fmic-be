@@ -1,13 +1,13 @@
-
 import { Module } from '@nestjs/common';
 import { VoiceService } from './voice.service';
 import { VoiceController } from './voice.controller';
 import { CustomersModule } from '../customers/customers.module';
 import { ProductsModule } from '../products/products.module';
 import { TransactionsModule } from '../transactions/transactions.module';
-import { GroqService } from './services/groq.service';
 import { KokoroService } from './services/kokoro.service';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { LanguageDetectionService } from './services/language-detection.service';
+import { GroqService } from './services/groq.service';
 
 @Module({
   imports: [
@@ -21,8 +21,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
       },
     ]),
   ],
-  providers: [VoiceService, GroqService, KokoroService],
+  providers: [GroqService, VoiceService, KokoroService, LanguageDetectionService],
   controllers: [VoiceController],
-  exports: [VoiceService, GroqService, KokoroService],
 })
 export class VoiceModule {}

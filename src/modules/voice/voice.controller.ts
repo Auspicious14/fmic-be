@@ -1,4 +1,3 @@
-
 import {
   Controller,
   Post,
@@ -21,6 +20,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { GetUser } from '../../common/decorators/get-user.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { LanguageDetectionService } from './services/language-detection.service';
 
 @ApiTags('Voice Processing')
 @ApiBearerAuth()
@@ -31,6 +31,7 @@ export class VoiceController {
     private readonly voiceService: VoiceService,
     private readonly groqService: GroqService,
     private readonly kokoroService: KokoroService,
+    private readonly languageDetectionService: LanguageDetectionService, // Added LanguageDetectionService
   ) {}
 
   @Post('process')
@@ -75,8 +76,18 @@ export class VoiceController {
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('audio'))
   async stt(@UploadedFile() file: { buffer: Buffer; mimetype: string }) {
-    const result = await this.groqService.transcribe(file.buffer, file.mimetype);
-    return { text: result.text, confidence: result.confidence };
+    const langResult = await this.languageDetectionService.detectLanguage(file.buffer, file.mimetype,); // Detect language
+    const language = langResult.language === 'mixed' ? 'en' : langResult.language; // Default 'mixed' to 'en'
+    const result = await this.groqService.transcribe(
+      file.buffer,
+      file.mimetype,
+      language, // Use adjusted language
+    );
+    return {
+      text: result.text,
+      confidence: result.confidence,
+      language: langResult.language, // Include language in response
+    };
   }
 
   @Post('tts')
