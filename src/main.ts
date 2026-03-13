@@ -1,9 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe, Logger } from '@nestjs/common';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { SwaggerModule, DocumentBuilder,  } from '@nestjs/swagger';
 import helmet from 'helmet';
 import compression from 'compression';
+const CSS_URL = "https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.1.0/swagger-ui.min.css";
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
@@ -32,7 +33,9 @@ async function bootstrap() {
     .addBearerAuth()
     .build();
   const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api/docs', app, document);
+  SwaggerModule.setup('api/docs', app, document, {
+    customCssUrl: CSS_URL,
+  });
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

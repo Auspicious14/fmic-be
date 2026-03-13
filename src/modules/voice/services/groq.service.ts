@@ -10,11 +10,25 @@ export class GroqService {
   private groq: Groq;
   private redis: Redis;
 
+  private mimeToExt(mimeType: string): string {
+    const map: Record<string, string> = {
+      'audio/webm': '.webm',
+      'audio/ogg': '.ogg',
+      'audio/wav': '.wav',
+      'audio/mpeg': '.mp3',
+      'audio/mp4': '.mp4',
+      'video/webm': '.webm',
+    };
+    return map[mimeType] ?? '.webm';
+  }
+
   constructor(private configService: ConfigService) {
     this.groq = new Groq({
       apiKey: this.configService.get<string>('GROQ_API_KEY'),
     });
-    this.redis = new Redis(this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379');
+    this.redis = new Redis(
+      this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
+    );
   }
 
   // async transcribe(file: Buffer, mimeType: string, language?: 'yo' | 'en'): Promise<{ text: string; confidence: number, language?: string }> {
@@ -77,11 +91,15 @@ export class GroqService {
         : `${process.env.HF_SPACE_URL}/asr/english`;
 
     const formData = new FormData();
-    formData.append('audio', new Blob([new Uint8Array(file)]), 'audio.webm');
+    formData.append(
+      'audio',
+      new Blob([new Uint8Array(file)], { type: mimeType }), // ← type was missing
+      `audio${this.mimeToExt(mimeType)}`,
+    );
     formData.append('mime_type', mimeType);
 
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('ASR timeout after 15s')), 15000)
+      setTimeout(() => reject(new Error('ASR timeout after 15s')), 15000),
     );
 
     try {
@@ -94,13 +112,15 @@ export class GroqService {
       ])) as Response;
 
       if (!response.ok) {
-        this.logger.error(`[ASR] HuggingFace endpoint error: ${response.status}`);
+        this.logger.error(
+          `[ASR] HuggingFace endpoint error: ${response.status}`,
+        );
         throw new Error(`ASR endpoint returned ${response.status}`);
       }
 
       const result = await response.json();
       this.logger.log(
-        `[ASR] model=${result.model} | lang=${language ?? 'en'} | transcript="${result.text}"`
+        `[ASR] model=${result.model} | lang=${language ?? 'en'} | transcript="${result.text}"`,
       );
 
       return {
@@ -109,7 +129,9 @@ export class GroqService {
         language: language ?? 'en',
       };
     } catch (error) {
-      this.logger.error(`[ASR] Transcription failed: ${(error as Error).message}`);
+      this.logger.error(
+        `[ASR] Transcription failed: ${(error as Error).message}`,
+      );
       throw error;
     }
   }
@@ -142,7 +164,10 @@ export class GroqService {
         return result;
       } catch (error) {
         attempts++;
-        this.logger.error(`Groq Llama NLU failed (attempt ${attempts}):`, (error as Error).message);
+        this.logger.error(
+          `Groq Llama NLU failed (attempt ${attempts}):`,
+          (error as Error).message,
+        );
         if (attempts >= maxAttempts) throw error;
         const delay = Math.pow(2, attempts) * 1000;
         await new Promise((resolve) => setTimeout(resolve, delay));
