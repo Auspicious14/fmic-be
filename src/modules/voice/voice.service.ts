@@ -34,43 +34,63 @@ export class VoiceService {
     userId: string,
   ): Promise<VoiceOutputDto> {
     try {
-      const detectionResult = await this.languageDetectionService.detectLanguage(
-        file.buffer, file.mimetype,
-      );
-      this.logger.debug(`Language detection result: ${JSON.stringify(detectionResult)}`);
+      // const detectionResult = await this.languageDetectionService.detectLanguage(
+      // file.buffer, file.mimetype,
+      // );
 
-      const language = detectionResult.language;
-      const transcriptionLanguage: 'yo' | 'en' = language === 'en' ? 'en' : 'yo';
+      //
+      // this.logger.debug(`Language detection result: ${JSON.stringify(detectionResult)}`);
 
-      const { text: transcript } = await this.groqService.transcribe(
-        file.buffer, file.mimetype, transcriptionLanguage,
+      // const language = detectionResult.language;
+      // const transcriptionLanguage: 'yo' | 'en' = language === 'en' ? 'en' : 'yo';
+
+      // const { text: transcript } = await this.groqService.transcribe(
+      // file.buffer, file.mimetype, transcriptionLanguage,
+      // );
+      const transcriptResult = await this.groqService.transcribeWithBestResult(
+        file.buffer,
+        file.mimetype,
       );
-      this.logger.log(`[VoiceService] lang=${transcriptionLanguage} transcript="${transcript}"`);
+      const transcript = transcriptResult.text;
+      const detectedLanguage = transcriptResult.language as 'yo' | 'en';
+      const ttsLang = detectedLanguage === 'yo' ? 'yo-NG' : 'pcm-NG';
+
+      this.logger.log(
+        `[VoiceService] lang=${ttsLang} transcript="${transcript}"`,
+      );
 
       const result = await this.processTranscript({ transcript }, userId);
 
       // Generate TTS audio for the first transaction's confirmation
       // so the frontend can play it back immediately
       const confirmationText = result.transactions[0]?.voice_confirmation ?? '';
-      const ttsLang = transcriptionLanguage === 'yo' ? 'yo-NG' : 'pcm-NG';
+      // const ttsLang = transcriptionLanguage === 'yo' ? 'yo-NG' : 'pcm-NG';
 
       let confirmationAudio: string | null = null;
       if (confirmationText) {
         try {
-          confirmationAudio = await this.kokoroService.generateTTS(confirmationText, ttsLang);
+          confirmationAudio = await this.kokoroService.generateTTS(
+            confirmationText,
+            ttsLang,
+          );
         } catch (ttsError) {
           // TTS failure should NOT fail the whole transaction — log and continue
-          this.logger.warn(`[VoiceService] TTS failed: ${(ttsError as Error).message}`);
+          this.logger.warn(
+            `[VoiceService] TTS failed: ${(ttsError as Error).message}`,
+          );
         }
       }
 
       return {
         ...result,
-        detectedLanguage: detectionResult.language,
+        detectedLanguage,
         confirmationAudio, // base64 WAV — null if TTS failed
       };
     } catch (error) {
-      this.logger.error('Audio processing pipeline failed:', (error as Error).message);
+      this.logger.error(
+        'Audio processing pipeline failed:',
+        (error as Error).message,
+      );
       throw error;
     }
   }
