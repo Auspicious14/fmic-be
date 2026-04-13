@@ -62,7 +62,7 @@ export class AuthService {
   }
 
   async validateUser(payload: any) {
-    const user = await this.userModel.findById(payload.sub);
+    const user = await this.userModel.findById(payload.userId);
     console.log({ user });
     return user;
   }

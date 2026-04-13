@@ -41,9 +41,26 @@ export class CustomersController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get all customers for the shop' })
-  async findAll(@GetUser() user: any) {
-    return this.customersService.findAll(user.userId);
+  @ApiOperation({ summary: 'Get all customers for the shop with filtering' })
+  async findAll(
+    @GetUser() user: any,
+    @Query('sortBy') sortBy?: string,
+    @Query('sortOrder') sortOrder?: 'asc' | 'desc',
+    @Query('minDebt') minDebt?: number,
+    @Query('maxDebt') maxDebt?: number,
+    @Query('limit') limit?: number,
+    @Query('offset') offset?: number,
+    @Query('search') search?: string,
+  ) {
+    return this.customersService.findAll(user.userId, {
+      sortBy,
+      sortOrder,
+      minDebt: minDebt ? Number(minDebt) : undefined,
+      maxDebt: maxDebt ? Number(maxDebt) : undefined,
+      limit: limit ? Number(limit) : undefined,
+      offset: offset ? Number(offset) : undefined,
+      search,
+    });
   }
 
   @Get('search')

@@ -25,10 +25,61 @@ export class CustomersService {
     return createdCustomer.save();
   }
 
-  async findAll(userId: string): Promise<CustomerDocument[]> {
-    return this.customerModel
-      .find({ shopOwner: userId as any, isDeleted: { $ne: true } })
-      .exec();
+  async findAll(
+    userId: string,
+    options: {
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
+      minDebt?: number;
+      maxDebt?: number;
+      limit?: number;
+      offset?: number;
+      search?: string;
+    } = {},
+  ): Promise<{ customers: CustomerDocument[]; total: number }> {
+    const {
+      sortBy = 'name',
+      sortOrder = 'asc',
+      minDebt,
+      maxDebt,
+      limit = 100,
+      offset = 0,
+      search,
+    } = options;
+
+    const query: any = {
+      shopOwner: userId as any,
+      isDeleted: { $ne: true },
+    };
+
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } },
+        { tag: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    if (minDebt !== undefined || maxDebt !== undefined) {
+      query.outstandingBalance = {};
+      if (minDebt !== undefined) query.outstandingBalance.$gte = minDebt;
+      if (maxDebt !== undefined) query.outstandingBalance.$lte = maxDebt;
+    }
+
+    const sort: any = {};
+    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+    const [customers, total] = await Promise.all([
+      this.customerModel
+        .find(query)
+        .sort(sort)
+        .limit(limit)
+        .skip(offset)
+        .exec(),
+      this.customerModel.countDocuments(query).exec(),
+    ]);
+
+    return { customers, total };
   }
 
   async findOne(id: string, userId: string): Promise<CustomerDocument> {
