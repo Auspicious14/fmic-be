@@ -9,10 +9,11 @@ import {
   VoiceIntent,
 } from './dto/voice-output.dto';
 import { TransactionsService } from '../transactions/transactions.service';
-import { GroqService } from './services/groq.service';
+import { AsrCandidate, GroqService } from './services/groq.service';
 import { KokoroService } from './services/kokoro.service';
 import { CustomerResolverService } from '../customers/customer-resolver.service';
 import { LanguageDetectionService } from './services/language-detection.service';
+import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 
 @Injectable()
 export class VoiceService {
@@ -27,6 +28,7 @@ export class VoiceService {
     private kokoroService: KokoroService,
     private customerResolverService: CustomerResolverService,
     private languageDetectionService: LanguageDetectionService,
+    private audioPreprocessorService: AudioPreprocessorService,
   ) {}
 
   async processAudio(
@@ -47,10 +49,37 @@ export class VoiceService {
       // const { text: transcript } = await this.groqService.transcribe(
       // file.buffer, file.mimetype, transcriptionLanguage,
       // );
-      const transcriptResult = await this.groqService.transcribeWithBestResult(
-        file.buffer,
-        file.mimetype,
+      const processedAudio =
+        await this.audioPreprocessorService.preprocess(file);
+      let asrCandidates: AsrCandidate[];
+      try {
+        asrCandidates = await this.groqService.transcribeCandidates(
+          processedAudio.buffer,
+          processedAudio.mimetype,
+        );
+      } catch (asrError) {
+        if (!processedAudio.wasProcessed) throw asrError;
+        this.logger.warn(
+          `[VoiceService] Processed audio ASR failed, retrying original audio: ${(asrError as Error).message}`,
+        );
+        asrCandidates = await this.groqService.transcribeCandidates(
+          file.buffer,
+          file.mimetype,
+        );
+      }
+      const products = await this.productsService.findAll(userId);
+      const { customers } = await this.customersService.findAll(userId);
+      const scoredCandidates = this.rankAsrCandidates(
+        asrCandidates,
+        products,
+        customers,
       );
+      const transcriptResult =
+        scoredCandidates[0] ??
+        (await this.groqService.transcribeWithBestResult(
+          file.buffer,
+          file.mimetype,
+        ));
       const transcript = transcriptResult.text;
       const detectedLanguage = transcriptResult.language as 'yo' | 'en';
       const ttsLang = detectedLanguage === 'yo' ? 'yo-NG' : 'pcm-NG';
@@ -85,6 +114,12 @@ export class VoiceService {
         ...result,
         detectedLanguage,
         confirmationAudio, // base64 WAV — null if TTS failed
+        transcriptionCandidates: scoredCandidates.map((candidate) => ({
+          text: candidate.text,
+          language: candidate.language,
+          confidence: candidate.confidence,
+          score: candidate.score,
+        })),
       };
     } catch (error) {
       this.logger.error(
@@ -232,5 +267,108 @@ export class VoiceService {
       transactions: processedTransactions,
       overall_transcript: transcript,
     };
+  }
+
+  private rankAsrCandidates(
+    candidates: AsrCandidate[],
+    products: any[],
+    customers: any[],
+  ): Array<AsrCandidate & { score: number }> {
+    return candidates
+      .map((candidate) => ({
+        ...candidate,
+        score: this.scoreAsrCandidate(candidate, products, customers),
+      }))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  private scoreAsrCandidate(
+    candidate: AsrCandidate,
+    products: any[],
+    customers: any[],
+  ): number {
+    const text = this.normalizeForVoiceMatching(candidate.text);
+    const words = text.split(/\s+/).filter(Boolean);
+    let score = (candidate.confidence ?? 0.5) * 10;
+
+    if (!text || words.length < 2) score -= 20;
+
+    const transactionMarkers = [
+      'bought',
+      'buy',
+      'paid',
+      'pay',
+      'owe',
+      'owes',
+      'credit',
+      'debt',
+      'book',
+      'put am',
+      'give',
+      'collect',
+      'san',
+      'gba',
+      'ra',
+      'ta',
+      'owo',
+      'owó',
+    ];
+    if (transactionMarkers.some((marker) => text.includes(marker))) score += 8;
+
+    const moneyOrQuantityPattern =
+      /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|k|naira|ngn|kan|meji|meta|mẹta|marun)\b/;
+    if (moneyOrQuantityPattern.test(text)) score += 6;
+
+    for (const customer of customers || []) {
+      const names = [
+        customer.name,
+        customer.tag,
+        ...(customer.aliases || []),
+      ].filter(Boolean);
+      if (
+        names.some((name) => {
+          const normalizedName = this.normalizeForVoiceMatching(name);
+          const firstName = normalizedName.split(/\s+/)[0];
+          return (
+            normalizedName.length > 2 &&
+            (text.includes(normalizedName) ||
+              (firstName.length > 2 && text.includes(firstName)))
+          );
+        })
+      ) {
+        score += 10;
+        break;
+      }
+    }
+
+    for (const product of products || []) {
+      const productName = this.normalizeForVoiceMatching(product.name);
+      const productWords = productName
+        .split(/\s+/)
+        .filter((word) => word.length > 2);
+      if (
+        productName.length > 2 &&
+        (text.includes(productName) ||
+          productWords.some((word) => text.includes(word)))
+      ) {
+        score += 8;
+        break;
+      }
+    }
+
+    const uniqueWords = new Set(words);
+    if (words.length > 4 && uniqueWords.size <= 2) score -= 10;
+
+    return score;
+  }
+
+  private normalizeForVoiceMatching(value: string): string {
+    return (value || '')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9₦\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 }

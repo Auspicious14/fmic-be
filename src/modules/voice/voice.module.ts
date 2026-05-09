@@ -8,6 +8,7 @@ import { KokoroService } from './services/kokoro.service';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { LanguageDetectionService } from './services/language-detection.service';
 import { GroqService } from './services/groq.service';
+import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 
 @Module({
   imports: [
@@ -21,7 +22,13 @@ import { GroqService } from './services/groq.service';
       },
     ]),
   ],
-  providers: [GroqService, VoiceService, KokoroService, LanguageDetectionService],
+  providers: [
+    GroqService,
+    VoiceService,
+    KokoroService,
+    LanguageDetectionService,
+    AudioPreprocessorService,
+  ],
   controllers: [VoiceController],
 })
 export class VoiceModule {}

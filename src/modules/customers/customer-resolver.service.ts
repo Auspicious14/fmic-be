@@ -1,4 +1,3 @@
-
 import { Injectable, Logger } from '@nestjs/common';
 import { CustomersService } from './customers.service';
 import { CustomerDocument } from './schemas/customer.schema';
@@ -27,7 +26,8 @@ export class CustomerResolverService {
       return { name, tag: descriptor, isNew: true, isAmbiguous: false };
     }
 
-    const customers = await this.customersService.findAll(userId);
+    const result = await this.customersService.findAll(userId);
+    const customers: CustomerDocument[] = result.customers;
     const normalizedSearchName = name.toLowerCase().trim();
     const normalizedSearchTag = descriptor?.toLowerCase().trim();
 
@@ -37,7 +37,8 @@ export class CustomerResolverService {
 
     // 1. Exact Name Match
     const exactMatch = customers.find(
-      (c) => c.name.toLowerCase() === normalizedSearchName,
+      (customer: CustomerDocument) =>
+        customer.name.toLowerCase() === normalizedSearchName,
     );
     if (exactMatch) {
       return {
@@ -50,8 +51,10 @@ export class CustomerResolverService {
     }
 
     // 2. Alias Match
-    const aliasMatch = customers.find((c) =>
-      c.aliases?.some((a) => a.toLowerCase() === normalizedSearchName),
+    const aliasMatch = customers.find((customer: CustomerDocument) =>
+      customer.aliases?.some(
+        (alias: string) => alias.toLowerCase() === normalizedSearchName,
+      ),
     );
     if (aliasMatch) {
       return {
@@ -66,9 +69,9 @@ export class CustomerResolverService {
     // 3. Descriptor-Based Matching
     if (normalizedSearchTag) {
       const tagMatch = customers.find(
-        (c) =>
-          c.name.toLowerCase().includes(normalizedSearchName) &&
-          c.tag?.toLowerCase() === normalizedSearchTag,
+        (customer: CustomerDocument) =>
+          customer.name.toLowerCase().includes(normalizedSearchName) &&
+          customer.tag?.toLowerCase() === normalizedSearchTag,
       );
       if (tagMatch) {
         return {
@@ -83,24 +86,27 @@ export class CustomerResolverService {
 
     // 4. Fuzzy Matching (Similarity Check)
     const potentialMatches = customers
-      .filter((c) => {
-        const cName = c.name.toLowerCase();
-        const cTag = c.tag?.toLowerCase() || '';
-        const cAliases = c.aliases?.map((a) => a.toLowerCase()) || [];
+      .filter((customer: CustomerDocument) => {
+        const cName = customer.name.toLowerCase();
+        const cTag = customer.tag?.toLowerCase() || '';
+        const cAliases =
+          customer.aliases?.map((alias: string) => alias.toLowerCase()) || [];
 
         return (
           cName.includes(normalizedSearchName) ||
           normalizedSearchName.includes(cName) ||
           cAliases.some(
-            (a) => a.includes(normalizedSearchName) || normalizedSearchName.includes(a),
+            (alias: string) =>
+              alias.includes(normalizedSearchName) ||
+              normalizedSearchName.includes(alias),
           ) ||
           (normalizedSearchTag && cTag.includes(normalizedSearchTag))
         );
       })
-      .map((c) => ({
-        id: c._id.toString(),
-        name: c.name,
-        tag: c.tag,
+      .map((customer: CustomerDocument) => ({
+        id: customer._id.toString(),
+        name: customer.name,
+        tag: customer.tag,
       }));
 
     if (potentialMatches.length > 0) {

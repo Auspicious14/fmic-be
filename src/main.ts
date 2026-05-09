@@ -7,10 +7,28 @@ import compression from 'compression';
 const CSS_URL =
   'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.1.0/swagger-ui.min.css';
 
+function getAllowedOrigins(): string[] {
+  const configuredOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',')
+        .map((origin) => origin.trim())
+        .filter(Boolean)
+    : [];
+
+  return [
+    ...configuredOrigins,
+    'http://localhost:4000',
+    'http://localhost:5173',
+    'http://127.0.0.1:4000',
+    'http://127.0.0.1:5173',
+    'https://fmic-fe.vercel.app',
+  ];
+}
+
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
   const app = await NestFactory.create(AppModule);
   app.setGlobalPrefix('api');
+  const allowedOrigins = getAllowedOrigins();
 
   // Security
   app.use(
@@ -22,18 +40,16 @@ async function bootstrap() {
           styleSrc: ["'self'", "'unsafe-inline'", "https://cdnjs.cloudflare.com"],
           scriptSrc: ["'self'", "https://cdnjs.cloudflare.com"],
           imgSrc: ["'self'", "data:", "https:"],
-          connectSrc: ["'self'", "https://fmic-fe.vercel.app"],
+          connectSrc: ["'self'", ...allowedOrigins],
         },
       },
     }),
   );
   app.enableCors({
-    origin: [
-      'http://localhost:3000',
-      'https://fmic-fe.vercel.app',
-    ],
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
   });
   app.use(compression());
 

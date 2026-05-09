@@ -1,4 +1,3 @@
-
 import { ApiProperty } from '@nestjs/swagger';
 import { IsOptional, IsString } from 'class-validator';
 
@@ -91,4 +90,12 @@ export class VoiceOutputDto {
 
   @ApiProperty({ required: false })
   overall_transcript?: string;
+
+  @ApiProperty({ required: false })
+  transcriptionCandidates?: Array<{
+    text: string;
+    language: 'yo' | 'en';
+    confidence: number;
+    score?: number;
+  }>;
 }
