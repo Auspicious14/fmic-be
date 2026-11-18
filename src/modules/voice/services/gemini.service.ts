@@ -33,7 +33,9 @@ export class GeminiService {
   constructor(private readonly configService: ConfigService) {
     this.apiKey = this.configService.get<string>('GEMINI_API_KEY');
     this.model =
-      this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash';
+      // gemini-2.5-flash is closed to new API keys. Override with GEMINI_MODEL
+      // when Google retires this one too (the 404 message names the new model).
+      this.configService.get<string>('GEMINI_MODEL') || 'gemini-3.8-flash';
     this.timeoutMs = Number(
       this.configService.get<string>('GEMINI_TIMEOUT_MS') || 45000,
     );
@@ -71,8 +73,9 @@ export class GeminiService {
           ],
         },
       ],
+      // No temperature override: Gemini 3 models are tuned for the default,
+      // and low values can make them loop.
       generationConfig: {
-        temperature: 0,
         responseMimeType: 'application/json',
       },
     };

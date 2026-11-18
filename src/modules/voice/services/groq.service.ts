@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import Groq from 'groq-sdk';
 import Redis from 'ioredis';
 import { createHash } from 'crypto';
+import { createOptionalRedis } from '../../../common/utils/optional-redis';
 import { LLAMA_SYSTEM_PROMPT } from '../constants/prompts';
 
 export interface AsrCandidate {
@@ -17,6 +18,7 @@ export class GroqService {
   private groq: Groq;
   // Optional: only used to cache LLM parses. Leave REDIS_URL unset on free hosting.
   private redis: Redis | null;
+  private readonly model: string;
   private readonly TRANSCRIPTION_TIMEOUT = 60000; // 60s — covers cold start + processing
 
   private mimeToExt(mimeType: string): string {
@@ -35,10 +37,13 @@ export class GroqService {
     this.groq = new Groq({
       apiKey: this.configService.get<string>('GROQ_API_KEY'),
     });
-    const redisUrl = this.configService.get<string>('REDIS_URL');
-    this.redis = redisUrl
-      ? new Redis(redisUrl, { maxRetriesPerRequest: 1 })
-      : null;
+    // llama-3.3-70b-versatile was shut down by Groq on 16 Aug 2026.
+    this.model =
+      this.configService.get<string>('GROQ_MODEL') || 'openai/gpt-oss-120b';
+    this.redis = createOptionalRedis(
+      this.configService.get<string>('REDIS_URL'),
+      this.logger,
+    );
   }
 
   // async transcribe(file: Buffer, mimeType: string, language?: 'yo' | 'en'): Promise<{ text: string; confidence: number, language?: string }> {
@@ -312,7 +317,7 @@ export class GroqService {
             { role: 'system', content: LLAMA_SYSTEM_PROMPT },
             { role: 'user', content: userContent },
           ],
-          model: 'llama-3.3-70b-versatile',
+          model: this.model,
           temperature: 0,
           response_format: { type: 'json_object' },
         });
@@ -323,10 +328,14 @@ export class GroqService {
       } catch (error) {
         attempts++;
         this.logger.error(
-          `Groq Llama NLU failed (attempt ${attempts}):`,
+          `Groq NLU failed (model=${this.model}, attempt ${attempts}):`,
           (error as Error).message,
         );
-        if (attempts >= maxAttempts) throw error;
+        // Only retry what can succeed on retry: rate limits and server errors.
+        // A 404 (model gone) or 400 will fail the same way three times.
+        const status = (error as { status?: number }).status;
+        const retryable = !status || status === 429 || status >= 500;
+        if (!retryable || attempts >= maxAttempts) throw error;
         const delay = Math.pow(2, attempts) * 1000;
         await new Promise((resolve) => setTimeout(resolve, delay));
       }

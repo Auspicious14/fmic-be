@@ -2,6 +2,7 @@ import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 import Redis from 'ioredis';
+import { createOptionalRedis } from '../../../common/utils/optional-redis';
 
 @Injectable()
 export class KokoroService {
@@ -20,7 +21,7 @@ export class KokoroService {
 
   constructor(private configService: ConfigService) {
     const redisUrl = this.configService.get<string>('REDIS_URL');
-    this.redis = redisUrl ? new Redis(redisUrl, { maxRetriesPerRequest: 1 }) : null;
+    this.redis = createOptionalRedis(redisUrl, this.logger);
     
     const kokoroUrl = this.configService.get<string>('KOKORO_TTS_URL') || 'http://localhost:8888';
     this.axiosInstance = axios.create({
