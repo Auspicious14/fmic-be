@@ -9,7 +9,7 @@ export interface LanguageDetectionResult {
 @Injectable()
 export class LanguageDetectionService {
   private readonly logger = new Logger(LanguageDetectionService.name);
-  private DETECTION_TIMEOUT: 10000;
+  private readonly DETECTION_TIMEOUT = 10000;
 
   async detectLanguage(
     buffer: Buffer,
@@ -50,7 +50,6 @@ export class LanguageDetectionService {
       return { language: 'yo', confidence: 'low', raw: 'probe_failed' };
     }
   }
-
 
   private scoreTranscript(transcript: string): LanguageDetectionResult {
     const YORUBA_MARKERS = [

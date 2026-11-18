@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { ClientSession, Model } from 'mongoose';
 import { Customer, CustomerDocument } from './schemas/customer.schema';
 import {
   CreateCustomerDto,
@@ -153,10 +153,24 @@ export class CustomersService {
       .exec();
   }
 
-  async updateBalance(id: string, amount: number): Promise<void> {
-    await this.customerModel.findByIdAndUpdate(id, {
+  /**
+   * Pass the caller's MongoDB session so the balance change commits or rolls
+   * back together with the transaction record. Without it, a failed save can
+   * still change what a customer owes.
+   */
+  async updateBalance(
+    id: string,
+    amount: number,
+    session?: ClientSession,
+  ): Promise<void> {
+    const update = {
       $inc: { outstandingBalance: amount },
       lastTransactionDate: new Date(),
-    });
+    };
+    if (session) {
+      await this.customerModel.findByIdAndUpdate(id, update, { session });
+    } else {
+      await this.customerModel.findByIdAndUpdate(id, update);
+    }
   }
 }

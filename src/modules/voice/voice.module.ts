@@ -9,6 +9,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { LanguageDetectionService } from './services/language-detection.service';
 import { GroqService } from './services/groq.service';
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
+import { GeminiService } from './services/gemini.service';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { AudioPreprocessorService } from './services/audio-preprocessor.service'
     KokoroService,
     LanguageDetectionService,
     AudioPreprocessorService,
+    GeminiService,
   ],
   controllers: [VoiceController],
 })

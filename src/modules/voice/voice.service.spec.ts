@@ -10,6 +10,7 @@ import { KokoroService } from './services/kokoro.service';
 import { CustomerResolverService } from '../customers/customer-resolver.service';
 import { LanguageDetectionService } from './services/language-detection.service';
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
+import { GeminiService } from './services/gemini.service';
 
 describe('VoiceService', () => {
   let service: VoiceService;
@@ -95,7 +96,14 @@ describe('VoiceService', () => {
     })),
   };
 
+  const mockGeminiService = {
+    isEnabled: jest.fn().mockReturnValue(false),
+    extractFromAudio: jest.fn(),
+  };
+
   beforeEach(async () => {
+    jest.clearAllMocks();
+    mockGeminiService.isEnabled.mockReturnValue(false);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         VoiceService,
@@ -117,6 +125,7 @@ describe('VoiceService', () => {
           provide: AudioPreprocessorService,
           useValue: mockAudioPreprocessorService,
         },
+        { provide: GeminiService, useValue: mockGeminiService },
       ],
     }).compile();
 
@@ -202,5 +211,111 @@ describe('VoiceService', () => {
     expect(mockGroqService.transcribeCandidates).toHaveBeenCalled();
     expect(result.transcriptionCandidates?.[0].score).toBeGreaterThan(0);
     expect(result.confirmationAudio).toBe('mock_base64');
+  });
+
+  it('passes shop context (customer + product names) to the LLM', async () => {
+    await service.processTranscript(
+      { transcript: 'Baba tunde buy 2 indomie' },
+      'user-id',
+    );
+    const [, context] = mockGroqService.extractStructuredData.mock.calls[0];
+    expect(context).toContain('Babatunde Adekunle');
+    expect(context).toContain('Indomie | unit price: 150');
+  });
+
+  it('computes the total from quantity x price instead of trusting the AI amount', async () => {
+    mockGroqService.extractStructuredData.mockResolvedValueOnce({
+      transactions: [
+        {
+          intent: VoiceIntent.CREDIT_SALE,
+          data: {
+            debtor: 'Babatunde',
+            amount: 150, // wrong: AI forgot to multiply
+            items: [{ name: 'indomie', quantity: 2, price: 0 }], // price not spoken
+          },
+          confidence_score: 0.9,
+          reasoning_summary: 'mock',
+        },
+      ],
+    });
+    const result = await service.processTranscript(
+      { transcript: 'x' },
+      'user-id',
+    );
+    expect(result.transactions[0].items[0].unit_price).toBe(150); // from catalogue
+    expect(result.transactions[0].items[0].product_name).toBe('Indomie');
+    expect(result.transactions[0].total_amount).toBe(300);
+  });
+
+  it('keeps the stated amount for payments', async () => {
+    mockGroqService.extractStructuredData.mockResolvedValueOnce({
+      transactions: [
+        {
+          intent: VoiceIntent.PAYMENT,
+          data: { debtor: 'Babatunde', amount: '2,500' },
+          confidence_score: 0.9,
+          reasoning_summary: 'mock',
+        },
+      ],
+    });
+    const result = await service.processTranscript(
+      { transcript: 'x' },
+      'user-id',
+    );
+    expect(result.transactions[0].total_amount).toBe(2500);
+  });
+
+  it('uses Gemini audio extraction when enabled and skips the old ASR', async () => {
+    mockGeminiService.isEnabled.mockReturnValue(true);
+    mockGeminiService.extractFromAudio.mockResolvedValueOnce({
+      transcript: 'Baba Tunde collect two Indomie, e go pay Friday',
+      language: 'pcm',
+      transactions: [
+        {
+          intent: VoiceIntent.CREDIT_SALE,
+          data: {
+            debtor: 'Babatunde Adekunle',
+            amount: 300,
+            items: [{ name: 'Indomie', quantity: 2, price: 150 }],
+          },
+          confidence_score: 0.92,
+          reasoning_summary: 'mock',
+        },
+      ],
+    });
+
+    const result = await service.processAudio(
+      { buffer: Buffer.from('audio'), mimetype: 'audio/ogg' },
+      'user-id',
+    );
+
+    expect(mockGeminiService.extractFromAudio).toHaveBeenCalledWith(
+      expect.objectContaining({ mimetype: 'audio/ogg' }),
+      expect.stringContaining('Babatunde Adekunle'),
+    );
+    expect(mockGroqService.transcribeCandidates).not.toHaveBeenCalled();
+    expect(result.detectedLanguage).toBe('pcm');
+    expect(result.overall_transcript).toContain('collect two Indomie');
+    expect(result.transactions[0].total_amount).toBe(300);
+    expect(mockKokoroService.generateTTS).toHaveBeenCalledWith(
+      expect.stringContaining('Debt don add'),
+      'pcm-NG',
+    );
+  });
+
+  it('falls back to ASR + Llama when Gemini fails (e.g. free-tier 429)', async () => {
+    mockGeminiService.isEnabled.mockReturnValue(true);
+    mockGeminiService.extractFromAudio.mockRejectedValueOnce(
+      new Error('Gemini 429: quota'),
+    );
+
+    const result = await service.processAudio(
+      { buffer: Buffer.from('audio'), mimetype: 'audio/webm' },
+      'user-id',
+    );
+
+    expect(mockGroqService.transcribeCandidates).toHaveBeenCalled();
+    expect(mockGroqService.extractStructuredData).toHaveBeenCalled();
+    expect(result.transactions[0].intent).toBe(VoiceIntent.CREDIT_SALE);
   });
 });

@@ -64,6 +64,12 @@ npm run test
 | `JWT_SECRET` | Secret key for JWT signing | `super-secret-key` |
 | `JWT_EXPIRES_IN` | JWT expiration time | `1h` |
 | `MOCK_AI` | Toggle mock AI extraction | `true` |
+| `GEMINI_API_KEY` | Free key from Google AI Studio. When set, voice notes go straight to Gemini (audio in, transactions out). When unset, the old HF ASR + Groq pipeline is used. | — |
+| `GEMINI_MODEL` | Gemini model to use | `gemini-2.5-flash` |
+| `GEMINI_TIMEOUT_MS` | Timeout for a Gemini call before falling back | `45000` |
+| `GROQ_API_KEY` | Groq key for the fallback LLM | — |
+| `HF_SPACE_URL` | Hugging Face Space with `/asr/yoruba` and `/asr/english` (fallback only) | — |
+| `REDIS_URL` | Optional. Caches LLM parses. Leave unset on free hosting. | — |
 
 ## 🏗 Architecture
 

@@ -6,7 +6,8 @@ import Redis from 'ioredis';
 @Injectable()
 export class KokoroService {
   private readonly logger = new Logger(KokoroService.name);
-  private readonly redis: Redis;
+  // Optional (currently unused for caching). Leave REDIS_URL unset on free hosting.
+  private readonly redis: Redis | null;
   private readonly axiosInstance: AxiosInstance;
 
   // Pre-generated Nigerian Pidgin confirmation phrases mapped to filenames on CDN
@@ -18,7 +19,8 @@ export class KokoroService {
   };
 
   constructor(private configService: ConfigService) {
-    this.redis = new Redis(this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379');
+    const redisUrl = this.configService.get<string>('REDIS_URL');
+    this.redis = redisUrl ? new Redis(redisUrl, { maxRetriesPerRequest: 1 }) : null;
     
     const kokoroUrl = this.configService.get<string>('KOKORO_TTS_URL') || 'http://localhost:8888';
     this.axiosInstance = axios.create({

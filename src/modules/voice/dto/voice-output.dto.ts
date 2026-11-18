@@ -78,7 +78,7 @@ export class VoiceOutputDto {
   @ApiProperty({ example: 'yo' })
   @IsOptional()
   @IsString()
-  detectedLanguage?: 'yo' | 'en' | 'mixed';
+  detectedLanguage?: 'yo' | 'en' | 'pcm' | 'mixed';
 
   @IsOptional()
   @IsString()

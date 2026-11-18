@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Groq from 'groq-sdk';
 import Redis from 'ioredis';
+import { createHash } from 'crypto';
 import { LLAMA_SYSTEM_PROMPT } from '../constants/prompts';
 
 export interface AsrCandidate {
@@ -14,8 +15,9 @@ export interface AsrCandidate {
 export class GroqService {
   private readonly logger = new Logger(GroqService.name);
   private groq: Groq;
-  private redis: Redis;
-  private TRANSCRIPTION_TIMEOUT: 60000; // 60s — covers cold start + processing
+  // Optional: only used to cache LLM parses. Leave REDIS_URL unset on free hosting.
+  private redis: Redis | null;
+  private readonly TRANSCRIPTION_TIMEOUT = 60000; // 60s — covers cold start + processing
 
   private mimeToExt(mimeType: string): string {
     const map: Record<string, string> = {
@@ -33,9 +35,10 @@ export class GroqService {
     this.groq = new Groq({
       apiKey: this.configService.get<string>('GROQ_API_KEY'),
     });
-    this.redis = new Redis(
-      this.configService.get<string>('REDIS_URL') || 'redis://localhost:6379',
-    );
+    const redisUrl = this.configService.get<string>('REDIS_URL');
+    this.redis = redisUrl
+      ? new Redis(redisUrl, { maxRetriesPerRequest: 1 })
+      : null;
   }
 
   // async transcribe(file: Buffer, mimeType: string, language?: 'yo' | 'en'): Promise<{ text: string; confidence: number, language?: string }> {
@@ -280,13 +283,24 @@ export class GroqService {
     return response.json();
   }
 
-  async extractStructuredData(transcript: string): Promise<any> {
-    const cacheKey = `llama_parse:${Buffer.from(transcript).toString('base64')}`;
-    const cached = await this.redis.get(cacheKey);
+  async extractStructuredData(
+    transcript: string,
+    shopContext?: string,
+  ): Promise<any> {
+    // Key includes the shop context: the same words can resolve differently
+    // once a new customer or product exists.
+    const cacheKey = `llama_parse:${createHash('sha256')
+      .update(`${shopContext ?? ''}\n---\n${transcript}`)
+      .digest('hex')}`;
+    const cached = await this.cacheGet(cacheKey);
     if (cached) {
       this.logger.log('Returning cached Llama parse result.');
       return JSON.parse(cached);
     }
+
+    const userContent = shopContext
+      ? `${shopContext}\n\nTRANSCRIPT:\n${transcript}`
+      : transcript;
 
     let attempts = 0;
     const maxAttempts = 3;
@@ -296,7 +310,7 @@ export class GroqService {
         const response = await this.groq.chat.completions.create({
           messages: [
             { role: 'system', content: LLAMA_SYSTEM_PROMPT },
-            { role: 'user', content: transcript },
+            { role: 'user', content: userContent },
           ],
           model: 'llama-3.3-70b-versatile',
           temperature: 0,
@@ -304,7 +318,7 @@ export class GroqService {
         });
 
         const result = JSON.parse(response.choices[0].message.content || '{}');
-        await this.redis.set(cacheKey, JSON.stringify(result), 'EX', 86400); // 24h TTL
+        await this.cacheSet(cacheKey, JSON.stringify(result));
         return result;
       } catch (error) {
         attempts++;
@@ -316,6 +330,25 @@ export class GroqService {
         const delay = Math.pow(2, attempts) * 1000;
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
+    }
+  }
+
+  private async cacheGet(key: string): Promise<string | null> {
+    if (!this.redis) return null;
+    try {
+      return await this.redis.get(key);
+    } catch (error) {
+      this.logger.warn(`Redis get failed: ${(error as Error).message}`);
+      return null;
+    }
+  }
+
+  private async cacheSet(key: string, value: string): Promise<void> {
+    if (!this.redis) return;
+    try {
+      await this.redis.set(key, value, 'EX', 86400); // 24h TTL
+    } catch (error) {
+      this.logger.warn(`Redis set failed: ${(error as Error).message}`);
     }
   }
 }

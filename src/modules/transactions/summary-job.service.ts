@@ -15,9 +15,9 @@ export class SummaryJobService {
   ) {}
 
   /**
-   * Run daily summary job at 11:30 PM
+   * Run daily summary job at 11:30 PM Lagos time (not server/UTC time)
    */
-  @Cron('30 23 * * *')
+  @Cron('30 23 * * *', { timeZone: 'Africa/Lagos' })
   async handleDailySummaryCron() {
     this.logger.log('Starting daily summary automated job...');
 
