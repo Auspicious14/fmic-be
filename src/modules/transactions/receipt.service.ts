@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
+import {
+  LAGOS_TIME_ZONE,
+  lagosDateCompact,
+  lagosDateString,
+} from '../../common/utils/lagos-time';
 
 export interface ReceiptData {
   transactionId: string;
@@ -23,6 +28,8 @@ export interface ReceiptData {
   paymentMethod: string;
   date: string;
   time: string;
+  /** YYYY-MM-DD of the transaction in Lagos time */
+  issuedOn: string;
   notes?: string;
 }
 
@@ -30,16 +37,30 @@ export interface ReceiptData {
 export class ReceiptService {
   private readonly logger = new Logger(ReceiptService.name);
 
-  generateReceiptNumber(transactionId: string): string {
+  /**
+   * The date in the receipt number is the TRANSACTION date (Lagos time), so
+   * the same receipt always has the same number no matter when it is viewed.
+   * Falls back to the date embedded in the MongoDB ObjectId.
+   */
+  generateReceiptNumber(transactionId: string, transactionDate?: Date): string {
     const hash = crypto
       .createHash('md5')
       .update(transactionId)
       .digest('hex')
       .substring(0, 8)
       .toUpperCase();
-    const date = new Date();
-    const dateStr = `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
-    return `RCP-${dateStr}-${hash}`;
+    const date =
+      transactionDate && !isNaN(transactionDate.getTime())
+        ? transactionDate
+        : this.dateFromObjectId(transactionId);
+    return `RCP-${lagosDateCompact(date)}-${hash}`;
+  }
+
+  private dateFromObjectId(id: string): Date {
+    if (/^[a-f0-9]{24}$/i.test(id)) {
+      return new Date(parseInt(id.substring(0, 8), 16) * 1000);
+    }
+    return new Date();
   }
 
   buildReceiptData(
@@ -63,7 +84,10 @@ export class ReceiptService {
 
     return {
       transactionId: transaction._id.toString(),
-      receiptNumber: this.generateReceiptNumber(transaction._id.toString()),
+      receiptNumber: this.generateReceiptNumber(
+        transaction._id.toString(),
+        transactionDate,
+      ),
       businessName: shopOwner?.shopName || shopOwner?.name || 'My Shop',
       businessPhone: shopOwner?.phone || '',
       businessAddress: shopOwner?.address || '',
@@ -82,11 +106,14 @@ export class ReceiptService {
         year: 'numeric',
         month: 'long',
         day: 'numeric',
+        timeZone: LAGOS_TIME_ZONE,
       }),
       time: transactionDate.toLocaleTimeString('en-NG', {
         hour: '2-digit',
         minute: '2-digit',
+        timeZone: LAGOS_TIME_ZONE,
       }),
+      issuedOn: lagosDateString(transactionDate),
       notes: transaction.voiceTranscript,
     };
   }
@@ -261,7 +288,7 @@ export class ReceiptService {
           This is an official transaction receipt.<br>
           <strong>Powered by FMIC</strong>
         </div>
-        <div class="footer-brand">Generated ${new Date().toISOString().split('T')[0]}</div>
+        <div class="footer-brand">Issued ${data.issuedOn}</div>
       </div>
     </div>
   </div>

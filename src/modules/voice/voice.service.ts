@@ -13,6 +13,8 @@ import { AsrCandidate, GroqService } from './services/groq.service';
 import { KokoroService } from './services/kokoro.service';
 import { CustomerResolverService } from '../customers/customer-resolver.service';
 import { LanguageDetectionService } from './services/language-detection.service';
+import { GeminiService } from './services/gemini.service';
+import { buildShopContextBlock } from './constants/shop-context';
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 
 @Injectable()
@@ -29,6 +31,7 @@ export class VoiceService {
     private customerResolverService: CustomerResolverService,
     private languageDetectionService: LanguageDetectionService,
     private audioPreprocessorService: AudioPreprocessorService,
+    private geminiService: GeminiService,
   ) {}
 
   async processAudio(
@@ -36,64 +39,86 @@ export class VoiceService {
     userId: string,
   ): Promise<VoiceOutputDto> {
     try {
-      // const detectionResult = await this.languageDetectionService.detectLanguage(
-      // file.buffer, file.mimetype,
-      // );
-
-      //
-      // this.logger.debug(`Language detection result: ${JSON.stringify(detectionResult)}`);
-
-      // const language = detectionResult.language;
-      // const transcriptionLanguage: 'yo' | 'en' = language === 'en' ? 'en' : 'yo';
-
-      // const { text: transcript } = await this.groqService.transcribe(
-      // file.buffer, file.mimetype, transcriptionLanguage,
-      // );
       const processedAudio =
         await this.audioPreprocessorService.preprocess(file);
-      let asrCandidates: AsrCandidate[];
-      try {
-        asrCandidates = await this.groqService.transcribeCandidates(
-          processedAudio.buffer,
-          processedAudio.mimetype,
-        );
-      } catch (asrError) {
-        if (!processedAudio.wasProcessed) throw asrError;
-        this.logger.warn(
-          `[VoiceService] Processed audio ASR failed, retrying original audio: ${(asrError as Error).message}`,
-        );
-        asrCandidates = await this.groqService.transcribeCandidates(
-          file.buffer,
-          file.mimetype,
-        );
-      }
       const products = await this.productsService.findAll(userId);
       const { customers } = await this.customersService.findAll(userId);
-      const scoredCandidates = this.rankAsrCandidates(
-        asrCandidates,
-        products,
-        customers,
-      );
-      const transcriptResult =
-        scoredCandidates[0] ??
-        (await this.groqService.transcribeWithBestResult(
-          file.buffer,
-          file.mimetype,
-        ));
-      const transcript = transcriptResult.text;
-      const detectedLanguage = transcriptResult.language as 'yo' | 'en';
+      const shopContext = buildShopContextBlock(customers, products);
+
+      let transcript = '';
+      let detectedLanguage: VoiceOutputDto['detectedLanguage'] = 'en';
+      let extraction: { transactions?: any[] } | null = null;
+      let scoredCandidates: Array<AsrCandidate & { score: number }> = [];
+
+      // 1. Preferred path: Gemini hears the audio directly (one call, free tier).
+      if (this.geminiService.isEnabled()) {
+        try {
+          const gemini = await this.geminiService.extractFromAudio(
+            processedAudio,
+            shopContext,
+          );
+          transcript = gemini.transcript;
+          detectedLanguage = gemini.language;
+          extraction = { transactions: gemini.transactions };
+        } catch (geminiError) {
+          this.logger.warn(
+            `[VoiceService] Gemini failed, falling back to ASR + Llama: ${(geminiError as Error).message}`,
+          );
+        }
+      }
+
+      // 2. Fallback path: Hugging Face ASR candidates + Groq Llama.
+      if (!extraction) {
+        let asrCandidates: AsrCandidate[];
+        try {
+          asrCandidates = await this.groqService.transcribeCandidates(
+            processedAudio.buffer,
+            processedAudio.mimetype,
+          );
+        } catch (asrError) {
+          if (!processedAudio.wasProcessed) throw asrError;
+          this.logger.warn(
+            `[VoiceService] Processed audio ASR failed, retrying original audio: ${(asrError as Error).message}`,
+          );
+          asrCandidates = await this.groqService.transcribeCandidates(
+            file.buffer,
+            file.mimetype,
+          );
+        }
+        scoredCandidates = this.rankAsrCandidates(
+          asrCandidates,
+          products,
+          customers,
+        );
+        const transcriptResult =
+          scoredCandidates[0] ??
+          (await this.groqService.transcribeWithBestResult(
+            file.buffer,
+            file.mimetype,
+          ));
+        transcript = transcriptResult.text;
+        detectedLanguage = transcriptResult.language as 'yo' | 'en';
+        extraction = await this.groqService.extractStructuredData(
+          transcript,
+          shopContext,
+        );
+      }
+
       const ttsLang = detectedLanguage === 'yo' ? 'yo-NG' : 'pcm-NG';
-
       this.logger.log(
-        `[VoiceService] lang=${ttsLang} transcript="${transcript}"`,
+        `[VoiceService] lang=${detectedLanguage} transcript="${transcript}"`,
       );
 
-      const result = await this.processTranscript({ transcript }, userId);
+      const result = await this.buildTransactions(
+        transcript,
+        extraction ?? {},
+        products,
+        userId,
+      );
 
       // Generate TTS audio for the first transaction's confirmation
       // so the frontend can play it back immediately
       const confirmationText = result.transactions[0]?.voice_confirmation ?? '';
-      // const ttsLang = transcriptionLanguage === 'yo' ? 'yo-NG' : 'pcm-NG';
 
       let confirmationAudio: string | null = null;
       if (confirmationText) {
@@ -136,43 +161,33 @@ export class VoiceService {
   ): Promise<VoiceOutputDto> {
     const { transcript } = processVoiceDto;
 
-    // 1. Gather Context
+    // 1. Gather context so the LLM can use real customer/product spellings
     const products = await this.productsService.findAll(userId);
+    const { customers } = await this.customersService.findAll(userId);
+    const shopContext = buildShopContextBlock(customers, products);
 
-    // 2. NLU with Groq Llama 3.3 70B - Now returns multiple transactions
-    const llamaResult =
-      await this.groqService.extractStructuredData(transcript);
-    const rawTransactions = llamaResult.transactions || [];
+    // 2. NLU with Groq Llama 3.3 70B - returns multiple transactions
+    const llamaResult = await this.groqService.extractStructuredData(
+      transcript,
+      shopContext,
+    );
+    return this.buildTransactions(transcript, llamaResult, products, userId);
+  }
 
+  /**
+   * Turns raw AI output into resolved, price-checked transactions.
+   * Money is computed here (quantity x unit price), never trusted from the AI.
+   */
+  private async buildTransactions(
+    transcript: string,
+    extraction: { transactions?: any[] },
+    products: any[],
+    userId: string,
+  ): Promise<VoiceOutputDto> {
+    const rawTransactions = extraction?.transactions || [];
     const processedTransactions: VoiceTransactionData[] = [];
 
     for (const rawTx of rawTransactions) {
-      // 3. Handle DAILY_SUMMARY intent separately
-      // if (rawTx.intent === VoiceIntent.DAILY_SUMMARY) {
-      //   const summary = await this.transactionsService.getDailySummary(userId);
-      //   const creditTotal = summary.totalCredit || 0;
-      //   const paymentTotal = summary.totalRevenue || 0;
-      //   const creditCount = summary.totalCreditCount || 0;
-
-      //   const summaryText = `Today summary: total debt added na ${creditTotal} naira for ${creditCount} customers. Total payments received na ${paymentTotal} naira.`;
-
-      //   processedTransactions.push({
-      //     intent: VoiceIntent.DAILY_SUMMARY,
-      //     resolvedCustomer: {
-      //       name: 'Shop Owner',
-      //       isNew: false,
-      //       isAmbiguous: false,
-      //     },
-      //     items: [],
-      //     total_amount: creditTotal - paymentTotal,
-      //     transaction_type: 'summary',
-      //     confidence_score: rawTx.confidence_score,
-      //     reasoning_summary: rawTx.reasoning_summary,
-      //     voice_confirmation: summaryText,
-      //   });
-      //   continue;
-      // }
-
       if (!rawTx.data?.debtor && rawTx.intent !== VoiceIntent.DAILY_SUMMARY) {
         this.logger.warn(
           `[VoiceService] No debtor extracted from transcript: "${transcript}"`,
@@ -194,7 +209,7 @@ export class VoiceService {
         continue; // skip to next transaction, don't crash
       }
 
-      // 4. Customer Resolution Pipeline
+      // Customer Resolution Pipeline
       const resolvedCustomer = await this.customerResolverService.resolve(
         rawTx.data.debtor,
         rawTx.data.descriptor,
@@ -202,39 +217,32 @@ export class VoiceService {
       );
 
       const itemsWithIds = (rawTx.data.items || []).map((item: any) => {
-        const itemName = item.name?.toLowerCase().trim() || '';
-        const itemWords = itemName
-          .split(/\s+/)
-          .filter((w: string) => w.length > 2);
-
-        const matchedProduct = products.find((p) => {
-          const productName = p.name.toLowerCase();
-          if (
-            itemName &&
-            (productName.includes(itemName) || itemName.includes(productName))
-          ) {
-            return true;
-          }
-          if (itemWords.length > 0) {
-            return itemWords.some((word: string) => productName.includes(word));
-          }
-          return false;
-        });
+        const matchedProduct = this.matchProduct(item.name, products);
+        const quantity = this.toPositiveNumber(item.quantity) || 1;
+        const spokenPrice = this.toPositiveNumber(item.price);
+        const unitPrice =
+          spokenPrice ||
+          this.toPositiveNumber(matchedProduct?.currentUnitPrice);
 
         return {
-          product_name: item.name,
+          product_name: matchedProduct?.name ?? item.name,
           product_id: matchedProduct?._id?.toString() || null,
-          quantity: item.quantity,
-          unit_price: item.price,
+          quantity,
+          unit_price: unitPrice,
         };
       });
 
-      // 5. Generate Voice Confirmation
+      const transactionAmount = this.computeAmount(
+        rawTx,
+        itemsWithIds,
+        transcript,
+      );
+
+      // Generate Voice Confirmation
       let confirmationText = 'I have recorded the transaction.';
       const customerDisplayName =
         resolvedCustomer.name +
         (resolvedCustomer.tag ? ` (${resolvedCustomer.tag})` : '');
-      const transactionAmount = rawTx.data.amount || 0;
 
       if (rawTx.intent === VoiceIntent.CREDIT_SALE) {
         confirmationText = `Debt don add for ${customerDisplayName}. Total na ${transactionAmount} naira.`;
@@ -242,7 +250,7 @@ export class VoiceService {
         confirmationText = `Payment don enter for ${customerDisplayName}. Amount na ${transactionAmount} naira.`;
       }
 
-      // 6. Map Intent to Transaction Type
+      // Map Intent to Transaction Type
       let transactionType = 'credit';
       if (rawTx.intent === VoiceIntent.PAYMENT) {
         transactionType = 'payment';
@@ -267,6 +275,72 @@ export class VoiceService {
       transactions: processedTransactions,
       overall_transcript: transcript,
     };
+  }
+
+  /**
+   * Credit sale with priced items -> sum of quantity x unit price.
+   * Otherwise (payments, or the trader only said a total) -> the stated amount.
+   */
+  private computeAmount(
+    rawTx: any,
+    items: Array<{ quantity: number; unit_price: number }>,
+    transcript: string,
+  ): number {
+    const statedAmount = this.toPositiveNumber(rawTx.data?.amount);
+    const allItemsPriced =
+      items.length > 0 && items.every((item) => item.unit_price > 0);
+
+    if (rawTx.intent === VoiceIntent.CREDIT_SALE && allItemsPriced) {
+      const itemsTotal = items.reduce(
+        (sum, item) => sum + item.quantity * item.unit_price,
+        0,
+      );
+      if (statedAmount && statedAmount !== itemsTotal) {
+        this.logger.warn(
+          `[VoiceService] AI amount ${statedAmount} != items total ${itemsTotal}; using items total. transcript="${transcript}"`,
+        );
+      }
+      return itemsTotal;
+    }
+    return statedAmount;
+  }
+
+  /** Exact name first, then substring, then best word overlap. */
+  private matchProduct(itemName: string, products: any[]): any | undefined {
+    const name = this.normalizeForVoiceMatching(itemName);
+    if (!name || !products?.length) return undefined;
+
+    const normalized = products.map((product) => ({
+      product,
+      name: this.normalizeForVoiceMatching(product.name),
+    }));
+
+    const exact = normalized.find((p) => p.name === name);
+    if (exact) return exact.product;
+
+    const contains = normalized.find(
+      (p) => p.name && (p.name.includes(name) || name.includes(p.name)),
+    );
+    if (contains) return contains.product;
+
+    const itemWords = name.split(' ').filter((w) => w.length > 2);
+    let best: { product: any; score: number } | undefined;
+    for (const p of normalized) {
+      const productWords = new Set(p.name.split(' '));
+      const score = itemWords.filter((w) => productWords.has(w)).length;
+      if (score > 0 && (!best || score > best.score)) {
+        best = { product: p.product, score };
+      }
+    }
+    return best?.product;
+  }
+
+  private toPositiveNumber(value: unknown): number {
+    const n =
+      typeof value === 'string'
+        ? Number(value.replace(/,/g, ''))
+        : Number(value);
+    return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
   private rankAsrCandidates(

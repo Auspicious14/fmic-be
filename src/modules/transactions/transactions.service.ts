@@ -21,6 +21,11 @@ import { InjectConnection } from '@nestjs/mongoose';
 import { RealtimeGateway } from '../realtime/realtime.gateway';
 import { ReceiptService } from './receipt.service';
 import * as crypto from 'crypto';
+import {
+  LAGOS_TIME_ZONE,
+  lagosDateString,
+  startOfLagosDay,
+} from '../../common/utils/lagos-time';
 
 @Injectable()
 export class TransactionsService {
@@ -83,7 +88,11 @@ export class TransactionsService {
       // Update customer balance
       const balanceChange =
         type === TransactionType.CREDIT ? totalAmount : -totalAmount;
-      await this.customersService.updateBalance(customerId, balanceChange);
+      await this.customersService.updateBalance(
+        customerId,
+        balanceChange,
+        session,
+      );
 
       await session.commitTransaction();
 
@@ -160,7 +169,7 @@ export class TransactionsService {
       });
 
       const savedTransaction = await transaction.save({ session });
-      await this.customersService.updateBalance(customerId, amount);
+      await this.customersService.updateBalance(customerId, amount, session);
 
       await session.commitTransaction();
       return savedTransaction;
@@ -199,8 +208,8 @@ export class TransactionsService {
    * Fixed daily summary — properly casts shopOwner to ObjectId and returns enriched data
    */
   async getDailySummary(userId: string) {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    // "Today" means today in Lagos, not today on the (UTC) server.
+    const startOfDay = startOfLagosDay();
 
     const shopOwnerObjectId = new Types.ObjectId(userId);
 
@@ -273,7 +282,7 @@ export class TransactionsService {
       breakdown.find((b) => b._id === TransactionType.CREDIT)?.count || 0;
 
     return {
-      date: new Date().toISOString().split('T')[0],
+      date: lagosDateString(),
       totalTransactions,
       totalRevenue,
       totalCredit,
@@ -288,9 +297,9 @@ export class TransactionsService {
    * Get transaction trends for the last 7 days
    */
   async getWeeklyTrends(userId: string) {
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    sevenDaysAgo.setHours(0, 0, 0, 0);
+    const sevenDaysAgo = startOfLagosDay(
+      new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+    );
 
     const shopOwnerObjectId = new Types.ObjectId(userId);
 
@@ -304,7 +313,13 @@ export class TransactionsService {
       {
         $group: {
           _id: {
-            date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
+            date: {
+              $dateToString: {
+                format: '%Y-%m-%d',
+                date: '$createdAt',
+                timezone: LAGOS_TIME_ZONE,
+              },
+            },
             type: '$type',
           },
           total: { $sum: '$totalAmount' },

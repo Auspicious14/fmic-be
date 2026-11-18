@@ -80,6 +80,41 @@ describe('ReceiptService', () => {
     });
   });
 
+  describe('dates use the transaction time in Lagos', () => {
+    it('uses the transaction date (Lagos) in the receipt number, not today', () => {
+      // 23:30 UTC on 7 March = 00:30 on 8 March in Lagos
+      const no = service.generateReceiptNumber(
+        '507f1f77bcf86cd799439011',
+        new Date('2026-03-07T23:30:00Z'),
+      );
+      expect(no.startsWith('RCP-20260308-')).toBe(true);
+    });
+
+    it('falls back to the date inside the ObjectId', () => {
+      // ObjectId timestamp 0x507f1f77 = 2012-10-17
+      const no = service.generateReceiptNumber('507f1f77bcf86cd799439011');
+      expect(no.startsWith('RCP-20121017-')).toBe(true);
+    });
+
+    it('shows the same day on the date line, receipt number and footer', () => {
+      const data = service.buildReceiptData(
+        {
+          _id: { toString: () => '507f1f77bcf86cd799439011' },
+          createdAt: '2026-03-07T23:30:00Z',
+          totalAmount: 40000,
+          type: 'credit',
+          items: [],
+        },
+        { name: 'Kamau' },
+        { shopName: 'My Shop' },
+      );
+      expect(data.date).toContain('8 March 2026');
+      expect(data.time).toMatch(/00:30/);
+      expect(data.receiptNumber).toContain('20260308');
+      expect(service.generateReceiptHtml(data)).toContain('Issued 2026-03-08');
+    });
+  });
+
   describe('buildReceiptData', () => {
     it('should build correct receipt data from transaction', () => {
       const data = service.buildReceiptData(
