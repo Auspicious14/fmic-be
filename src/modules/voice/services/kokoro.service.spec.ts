@@ -153,4 +153,20 @@ describe('KokoroService', () => {
       expect(mockedAxiosInstance.post).toHaveBeenCalled();
     });
   });
+
+  it('skips server TTS immediately when KOKORO_TTS_URL is not set', async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        KokoroService,
+        { provide: ConfigService, useValue: { get: jest.fn(() => null) } },
+      ],
+    }).compile();
+    const unconfigured = module.get<KokoroService>(KokoroService);
+    mockedAxiosInstance.post.mockClear();
+
+    await expect(
+      unconfigured.generateTTS('Debt don add for Tunde', 'pcm-NG'),
+    ).rejects.toThrow();
+    expect(mockedAxiosInstance.post).not.toHaveBeenCalled();
+  });
 });

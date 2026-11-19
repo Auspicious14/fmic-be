@@ -19,11 +19,16 @@ export class KokoroService {
     "Price don change": "confirmation_price_updated.wav",
   };
 
+  private readonly kokoroConfigured: boolean;
+
   constructor(private configService: ConfigService) {
     const redisUrl = this.configService.get<string>('REDIS_URL');
     this.redis = createOptionalRedis(redisUrl, this.logger);
     
-    const kokoroUrl = this.configService.get<string>('KOKORO_TTS_URL') || 'http://localhost:8888';
+    // No localhost default: on hosted deployments there is no Kokoro server,
+    // and trying localhost:8888 just burns ~3s of retries on every request.
+    const kokoroUrl = this.configService.get<string>('KOKORO_TTS_URL');
+    this.kokoroConfigured = Boolean(kokoroUrl);
     this.axiosInstance = axios.create({
       baseURL: kokoroUrl,
       timeout: 5000, // 5 seconds timeout as per production requirements
@@ -75,6 +80,9 @@ export class KokoroService {
   }
 
   private async generateYorubaTTS(text: string): Promise<string> {
+    if (!process.env.HF_SPACE_URL) {
+      return this.generateTTS(text, 'pcm-NG');
+    }
     try {
       this.logger.log(`[TTS] YarnGPT2b generating for: "${text.substring(0, 60)}..."`);
 
@@ -130,6 +138,11 @@ export class KokoroService {
    * Generates audio using Kokoro service with retry logic
    */
   private async generateWithRetry(text: string, lang: string, attempts: number = 3): Promise<string> {
+    if (!this.kokoroConfigured) {
+      // The frontend falls back to the browser's own voice when this fails.
+      throw new Error('KOKORO_TTS_URL is not set; server TTS skipped');
+    }
+
     let lastError: Error = new Error('Max retries exceeded');
     
     for (let i = 1; i <= attempts; i++) {
@@ -153,6 +166,10 @@ export class KokoroService {
         lastError = error;
         this.logger.warn(`Kokoro generation attempt ${i} failed: ${error.message}`);
         
+        // Server not running / wrong host: retrying cannot help.
+        const code = (error as { code?: string }).code;
+        if (code === 'ECONNREFUSED' || code === 'ENOTFOUND') break;
+
         if (i < attempts) {
           const delay = Math.pow(2, i) * 500; // Exponential backoff: 1s, 2s...
           await new Promise(resolve => setTimeout(resolve, delay));
