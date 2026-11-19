@@ -86,7 +86,7 @@ export class SummaryJobService {
           <p>Unique Customers Served: <strong>${summary.uniqueCustomers}</strong></p>
           
           <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 0.8em; color: #999; text-align: center;">
-            Sent automatically by FMIC Transaction System.<br/>
+            Sent automatically by Ledga.<br/>
             &copy; 2026 ${user.shopName}
           </div>
         </div>

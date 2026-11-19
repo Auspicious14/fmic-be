@@ -10,6 +10,8 @@ import { TransactionsModule } from './modules/transactions/transactions.module';
 import { VoiceModule } from './modules/voice/voice.module';
 import { IntegrityModule } from './modules/integrity/integrity.module';
 import { RealtimeModule } from './modules/realtime/realtime.module';
+import { PaymentsModule } from './modules/payments/payments.module';
+import { WhatsappModule } from './modules/whatsapp/whatsapp.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handlebars.adapter';
@@ -33,6 +35,8 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handleba
     VoiceModule,
     IntegrityModule,
     RealtimeModule,
+    PaymentsModule,
+    WhatsappModule,
     ScheduleModule.forRoot(),
     MailerModule.forRootAsync({
       imports: [ConfigModule],
@@ -48,7 +52,7 @@ import { HandlebarsAdapter } from '@nestjs-modules/mailer/dist/adapters/handleba
           },
         },
         defaults: {
-          from: '"FMIC Support" <noreply@fmic.example.com>',
+          from: '"Ledga" <noreply@ledga.ng>',
         },
         template: {
           dir: __dirname + '/templates',

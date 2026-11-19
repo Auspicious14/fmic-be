@@ -2,6 +2,7 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
@@ -9,6 +10,7 @@ import { Model } from 'mongoose';
 import * as bcrypt from 'bcrypt';
 import { User, UserDocument } from './schemas/user.schema';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { normalizeNigerianPhone } from '../../common/utils/phone';
 
 @Injectable()
 export class AuthService {
@@ -62,9 +64,32 @@ export class AuthService {
   }
 
   async validateUser(payload: any) {
-    const user = await this.userModel.findById(payload.userId);
-    console.log({ user });
-    return user;
+    // Never send the password hash to the browser.
+    return this.userModel.findById(payload.userId).select('-password');
+  }
+
+  /** Links (or unlinks, with an empty value) the shop's WhatsApp number. */
+  async setWhatsappPhone(userId: string, phone: string | null) {
+    const normalized = phone ? normalizeNigerianPhone(phone) : null;
+    if (phone && !normalized) {
+      throw new BadRequestException('Enter a valid phone number, e.g. 08031234567');
+    }
+    if (normalized) {
+      const taken = await this.userModel.findOne({
+        whatsappPhone: normalized,
+        _id: { $ne: userId },
+      });
+      if (taken) {
+        throw new ConflictException('This WhatsApp number is already linked to another shop');
+      }
+    }
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        normalized ? { whatsappPhone: normalized } : { $unset: { whatsappPhone: 1 } },
+        { new: true },
+      )
+      .select('-password');
   }
 
   async findAll() {

@@ -354,12 +354,34 @@ export class TransactionsService {
   async findOne(id: string, userId: string): Promise<TransactionDocument> {
     const transaction = await this.transactionModel
       .findOne({ _id: id as any, shopOwner: userId as any })
-      .populate('customer', 'name phone email address')
+      .populate('customer', 'name phone email address outstandingBalance')
       .exec();
     if (!transaction) {
       throw new NotFoundException(`Transaction with ID ${id} not found`);
     }
     return transaction;
+  }
+
+  /**
+   * Receipt HTML for the public link sent to a customer (no login).
+   * The caller must have verified the link signature first.
+   */
+  async getPublicReceiptHtml(id: string): Promise<string> {
+    if (!Types.ObjectId.isValid(id)) {
+      throw new NotFoundException('Receipt not found');
+    }
+    const transaction = await this.transactionModel
+      .findById(id)
+      .populate('customer', 'name phone outstandingBalance')
+      .populate('shopOwner', 'shopName name')
+      .exec();
+    if (!transaction) throw new NotFoundException('Receipt not found');
+    const data = this.receiptService.buildReceiptData(
+      transaction,
+      (transaction as any).customer,
+      (transaction as any).shopOwner,
+    );
+    return this.receiptService.generateReceiptHtml(data);
   }
 
   /**

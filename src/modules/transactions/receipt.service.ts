@@ -1,6 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 import {
+  buildPayUrl,
+  buildPublicReceiptUrl,
+} from '../../common/utils/signed-link';
+import {
   LAGOS_TIME_ZONE,
   lagosDateCompact,
   lagosDateString,
@@ -31,6 +35,12 @@ export interface ReceiptData {
   /** YYYY-MM-DD of the transaction in Lagos time */
   issuedOn: string;
   notes?: string;
+  /** What the customer owes in total right now (all receipts). */
+  outstandingBalance?: number;
+  /** Flutterwave "Pay now" link for that balance, when payments are set up. */
+  payUrl?: string | null;
+  /** Link the customer can open without logging in. */
+  receiptUrl?: string | null;
 }
 
 @Injectable()
@@ -115,6 +125,12 @@ export class ReceiptService {
       }),
       issuedOn: lagosDateString(transactionDate),
       notes: transaction.voiceTranscript,
+      outstandingBalance: customer?.outstandingBalance,
+      receiptUrl: buildPublicReceiptUrl(transaction._id.toString()),
+      payUrl:
+        customer?.outstandingBalance > 0
+          ? buildPayUrl(customer?._id?.toString?.() ?? '')
+          : null,
     };
   }
 
@@ -179,6 +195,9 @@ export class ReceiptService {
   .total-label.final { color: rgba(255,255,255,0.7); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; }
   .total-value { font-size: 14px; color: #0f172a; font-weight: 700; }
   .total-value.final { color: #ffffff; font-size: 22px; font-weight: 900; }
+  .pay-section { padding: 0 28px 20px; }
+  .pay-button { display: block; text-align: center; background: #16a34a; color: #ffffff; text-decoration: none; font-weight: 800; font-size: 15px; padding: 14px 16px; border-radius: 14px; }
+  .pay-hint { text-align: center; font-size: 11px; color: #64748b; margin-top: 8px; }
   .notes-section { padding: 16px 28px; border-top: 1px dashed #e2e8f0; }
   .notes-text { font-size: 12px; color: #94a3b8; font-style: italic; line-height: 1.5; }
   .footer { padding: 24px 28px; text-align: center; border-top: 2px dashed #e2e8f0; }
@@ -271,6 +290,17 @@ export class ReceiptService {
       </div>
 
       ${
+        data.payUrl
+          ? `
+      <!-- Pay now (Flutterwave) -->
+      <div class="pay-section">
+        <a class="pay-button" href="${data.payUrl}">Pay ${formatCurrency(data.outstandingBalance ?? 0)} now</a>
+        <div class="pay-hint">Secure payment by card, transfer or USSD via Flutterwave</div>
+      </div>`
+          : ''
+      }
+
+      ${
         data.notes
           ? `
       <!-- Notes -->
@@ -286,7 +316,7 @@ export class ReceiptService {
           Thank you for your business!<br>
           ${data.businessAddress ? data.businessAddress + '<br>' : ''}
           This is an official transaction receipt.<br>
-          <strong>Powered by FMIC</strong>
+          <strong>Powered by Ledga</strong>
         </div>
         <div class="footer-brand">Issued ${data.issuedOn}</div>
       </div>
@@ -332,8 +362,9 @@ ${itemsList}
 💰 *TOTAL: ${formatCurrency(data.totalAmount)}*
 ${data.notes ? `\n📝 _${data.notes}_` : ''}
 
+${data.receiptUrl ? `\n🧾 View receipt: ${data.receiptUrl}` : ''}${data.payUrl ? `\n💳 *Pay ${formatCurrency(data.outstandingBalance ?? 0)} now:* ${data.payUrl}\n` : ''}
 _Thank you for your business!_
-_Powered by FMIC_`;
+_Powered by Ledga_`;
   }
 
   buildWhatsAppUrl(phone: string, message: string): string {

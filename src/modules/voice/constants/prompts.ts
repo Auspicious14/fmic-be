@@ -23,6 +23,9 @@ RULES:
 - "quantity" is the number of units bought. "price" is the price of ONE unit. "amount" is the total money for that transaction (sum of quantity x price for a credit sale; the money paid for a payment).
 - If a SHOP CONTEXT block is provided: when the speaker refers to a known customer or product, use the exact spelling from the context (transcripts often misspell names). If a unit price is not spoken, use the product's known unit price. Do NOT invent customers who are not mentioned.
 - If the speaker gives a total but no unit price, set "price" to 0 and put the total in "amount".
+- YORUBA: "X ra" / "X ó ra" / "X gbà" / "X mú" means X bought/took on credit, so the word(s) just before ra/gbà/mú are the buyer's name. "X san" means X paid. "ó jẹ́" / "máa jẹ́" introduces the total. Numbers may be in Yoruba (kan, méjì, mẹ́ta, mẹ́rin, márùn-ún) or digits.
+- TRANSCRIPTS ARE IMPERFECT: speech-to-text often splits or tone-marks a name into syllables (e.g. "gàá ní ò rá àkàrá" is "Gani ó ra akara" = Gani bought akara). Join the syllables into the most likely name, preferring a KNOWN CUSTOMER that sounds similar.
+- If a sale or payment clearly happened but the buyer's name is uncertain, STILL return your best-guess name with a lower confidence_score (e.g. 0.4) instead of leaving "debtor" empty. The trader confirms or corrects it before anything is saved.
 
 JSON SCHEMA:
 {

@@ -9,7 +9,7 @@ import { LLAMA_SYSTEM_PROMPT } from '../constants/prompts';
 export interface AsrCandidate {
   text: string;
   confidence: number;
-  language: 'yo' | 'en';
+  language: 'yo' | 'en' | 'pcm';
 }
 
 @Injectable()

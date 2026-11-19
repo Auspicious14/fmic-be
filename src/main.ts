@@ -26,7 +26,8 @@ function getAllowedOrigins(): string[] {
 
 async function bootstrap() {
   const logger = new Logger('Bootstrap');
-  const app = await NestFactory.create(AppModule);
+  // rawBody: needed to check the WhatsApp webhook signature.
+  const app = await NestFactory.create(AppModule, { rawBody: true });
   app.setGlobalPrefix('api');
   const allowedOrigins = getAllowedOrigins();
 
@@ -64,7 +65,7 @@ async function bootstrap() {
 
   // Swagger
   const config = new DocumentBuilder()
-    .setTitle('FMIC Backend API')
+    .setTitle('Ledga API')
     .setDescription('Financial Memory Layer for Informal Commerce')
     .setVersion('1.0')
     .addBearerAuth()

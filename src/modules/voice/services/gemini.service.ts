@@ -81,26 +81,49 @@ export class GeminiService {
     };
 
     const started = Date.now();
-    const response = await fetch(
+    const response = await this.postWithRetry(body, started);
+    const json: any = await response.json();
+    return this.parseResponse(json, started);
+  }
+
+  /**
+   * Free-tier Gemini sometimes answers 503 "high demand" or 429. One quick
+   * retry fixes most of these; we only retry if the first try failed fast, so
+   * a slow failure doesn't push the request past the hosting time limit.
+   */
+  private async postWithRetry(body: unknown, started: number): Promise<Response> {
+    let response = await this.post(body);
+    if (
+      (response.status === 503 || response.status === 429) &&
+      Date.now() - started < 10000
+    ) {
+      this.logger.warn(`[Gemini] ${response.status}, retrying once`);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      response = await this.post(body);
+    }
+    if (!response.ok) {
+      const detail = (await response.text()).slice(0, 300);
+      throw new Error(`Gemini ${response.status}: ${detail}`);
+    }
+    return response;
+  }
+
+  private post(body: unknown): Promise<Response> {
+    return fetch(
       `${GEMINI_BASE_URL}/models/${encodeURIComponent(this.model)}:generateContent`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-goog-api-key': this.apiKey,
+          'x-goog-api-key': this.apiKey ?? '',
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(this.timeoutMs),
       },
     );
+  }
 
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 300);
-      // 429 = free-tier rate limit hit; caller falls back to the old pipeline.
-      throw new Error(`Gemini ${response.status}: ${detail}`);
-    }
-
-    const json: any = await response.json();
+  private parseResponse(json: any, started: number): GeminiVoiceResult {
     const text: string = (json?.candidates?.[0]?.content?.parts ?? [])
       .map((part: any) => part?.text ?? '')
       .join('');

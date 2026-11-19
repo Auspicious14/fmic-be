@@ -1,8 +1,9 @@
-import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { AxiosInstance } from 'axios';
 import Redis from 'ioredis';
 import { createOptionalRedis } from '../../../common/utils/optional-redis';
+import { SpitchService } from './spitch.service';
 
 @Injectable()
 export class KokoroService {
@@ -21,7 +22,10 @@ export class KokoroService {
 
   private readonly kokoroConfigured: boolean;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+    @Optional() private readonly spitchService?: SpitchService,
+  ) {
     const redisUrl = this.configService.get<string>('REDIS_URL');
     this.redis = createOptionalRedis(redisUrl, this.logger);
     
@@ -40,6 +44,18 @@ export class KokoroService {
    * Priority: Pre-generated -> Redis Cache -> Real-time Generation
    */
   async generateTTS(text: string, lang: string = 'pcm-NG'): Promise<string> {
+    // Spitch first: real Nigerian Pidgin and Yoruba voices, hosted, no server
+    // of our own to keep alive. Falls through to the old chain on any error.
+    if (text && this.spitchService?.isEnabled()) {
+      try {
+        return await this.spitchService.generateSpeech(text, lang);
+      } catch (error) {
+        this.logger.warn(
+          `[TTS] Spitch failed (${(error as Error).message}), trying other engines`,
+        );
+      }
+    }
+
     if (lang === 'yo-NG') {
       return this.generateYorubaTTS(text);
     }

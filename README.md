@@ -71,6 +71,24 @@ npm run test
 | `GROQ_MODEL` | Groq model for the fallback LLM | `openai/gpt-oss-120b` |
 | `HF_SPACE_URL` | Hugging Face Space with `/asr/yoruba` and `/asr/english` (fallback only) | — |
 | `REDIS_URL` | Optional. Caches LLM parses. Leave unset on free hosting. | — |
+| `SPITCH_API_KEY` | Spitch (spitch.app) key: Nigerian speech-to-text (Yoruba, Pidgin, English) as the fallback after Gemini, and Pidgin/Yoruba voices for spoken replies | — |
+| `SPITCH_ASR_LANGUAGES` | Languages to transcribe each voice note in (each one is billed) | `yo,pi,en` |
+| `SPITCH_VOICE_PCM` / `SPITCH_VOICE_YO` | Voices for spoken replies | `ufoma` / `sade` |
+| `PUBLIC_API_URL` | Public URL of this API, without `/api` (used in receipt and payment links) | — |
+| `LINK_SIGNING_SECRET` | Secret for signing public receipt/payment links (falls back to `JWT_SECRET`) | — |
+| `FLW_SECRET_KEY` | Flutterwave secret key. Enables "Pay now" on receipts | — |
+| `FLW_SECRET_HASH` | The secret hash you set under Flutterwave → Settings → Webhooks | — |
+| `FLW_FALLBACK_EMAIL` | Email sent to Flutterwave when a customer has none | shop owner's email |
+| `WHATSAPP_TOKEN` | WhatsApp Cloud API access token (Meta developer dashboard) | — |
+| `WHATSAPP_PHONE_NUMBER_ID` | The bot's phone number ID from WhatsApp → API Setup | — |
+| `WHATSAPP_VERIFY_TOKEN` | Any string; enter the same one when you set the webhook in Meta | — |
+| `WHATSAPP_APP_SECRET` | Meta app secret, used to check webhook signatures | — |
+| `APP_URL` | Frontend URL, used in the bot's "link your number" message | — |
+
+### Webhook URLs to register
+
+- Flutterwave: `https://<api>/api/payments/flutterwave/webhook`
+- WhatsApp (Meta): `https://<api>/api/whatsapp/webhook`
 
 ## 🏗 Architecture
 

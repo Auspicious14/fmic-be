@@ -10,6 +10,7 @@ import { LanguageDetectionService } from './services/language-detection.service'
 import { GroqService } from './services/groq.service';
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 import { GeminiService } from './services/gemini.service';
+import { SpitchService } from './services/spitch.service';
 
 @Module({
   imports: [
@@ -30,7 +31,9 @@ import { GeminiService } from './services/gemini.service';
     LanguageDetectionService,
     AudioPreprocessorService,
     GeminiService,
+    SpitchService,
   ],
   controllers: [VoiceController],
+  exports: [VoiceService],
 })
 export class VoiceModule {}

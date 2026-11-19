@@ -11,6 +11,7 @@ import { CustomerResolverService } from '../customers/customer-resolver.service'
 import { LanguageDetectionService } from './services/language-detection.service';
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 import { GeminiService } from './services/gemini.service';
+import { SpitchService } from './services/spitch.service';
 
 describe('VoiceService', () => {
   let service: VoiceService;
@@ -96,6 +97,11 @@ describe('VoiceService', () => {
     })),
   };
 
+  const mockSpitchService = {
+    isEnabled: jest.fn().mockReturnValue(false),
+    transcribeCandidates: jest.fn(),
+  };
+
   const mockGeminiService = {
     isEnabled: jest.fn().mockReturnValue(false),
     extractFromAudio: jest.fn(),
@@ -104,6 +110,7 @@ describe('VoiceService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
     mockGeminiService.isEnabled.mockReturnValue(false);
+    mockSpitchService.isEnabled.mockReturnValue(false);
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         VoiceService,
@@ -126,6 +133,7 @@ describe('VoiceService', () => {
           useValue: mockAudioPreprocessorService,
         },
         { provide: GeminiService, useValue: mockGeminiService },
+        { provide: SpitchService, useValue: mockSpitchService },
       ],
     }).compile();
 
@@ -317,5 +325,46 @@ describe('VoiceService', () => {
     expect(mockGroqService.transcribeCandidates).toHaveBeenCalled();
     expect(mockGroqService.extractStructuredData).toHaveBeenCalled();
     expect(result.transactions[0].intent).toBe(VoiceIntent.CREDIT_SALE);
+  });
+
+  it('uses Spitch ASR with shop names as hints when Gemini fails', async () => {
+    mockGeminiService.isEnabled.mockReturnValue(true);
+    mockGeminiService.extractFromAudio.mockRejectedValueOnce(
+      new Error('Gemini 503: high demand'),
+    );
+    mockSpitchService.isEnabled.mockReturnValue(true);
+    mockSpitchService.transcribeCandidates.mockResolvedValueOnce([
+      { text: 'noise', confidence: 0.8, language: 'en' },
+      {
+        text: 'Babatunde Adekunle collect two Indomie',
+        confidence: 0.8,
+        language: 'pcm',
+      },
+    ]);
+
+    const result = await service.processAudio(
+      { buffer: Buffer.from('audio'), mimetype: 'audio/wav' },
+      'user-id',
+    );
+
+    const [, , hints] = mockSpitchService.transcribeCandidates.mock.calls[0];
+    expect(hints).toEqual(expect.arrayContaining(['Babatunde Adekunle', 'Indomie']));
+    expect(mockGroqService.transcribeCandidates).not.toHaveBeenCalled();
+    expect(result.overall_transcript).toBe('Babatunde Adekunle collect two Indomie');
+    expect(result.detectedLanguage).toBe('pcm');
+  });
+
+  it('falls back to the HF Space when Spitch fails', async () => {
+    mockSpitchService.isEnabled.mockReturnValue(true);
+    mockSpitchService.transcribeCandidates.mockRejectedValueOnce(
+      new Error('All Spitch ASR calls failed'),
+    );
+
+    await service.processAudio(
+      { buffer: Buffer.from('audio'), mimetype: 'audio/wav' },
+      'user-id',
+    );
+
+    expect(mockGroqService.transcribeCandidates).toHaveBeenCalled();
   });
 });

@@ -14,6 +14,7 @@ import { KokoroService } from './services/kokoro.service';
 import { CustomerResolverService } from '../customers/customer-resolver.service';
 import { LanguageDetectionService } from './services/language-detection.service';
 import { GeminiService } from './services/gemini.service';
+import { SpitchService } from './services/spitch.service';
 import { buildShopContextBlock } from './constants/shop-context';
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 
@@ -32,6 +33,7 @@ export class VoiceService {
     private languageDetectionService: LanguageDetectionService,
     private audioPreprocessorService: AudioPreprocessorService,
     private geminiService: GeminiService,
+    private spitchService: SpitchService,
   ) {}
 
   async processAudio(
@@ -67,24 +69,15 @@ export class VoiceService {
         }
       }
 
-      // 2. Fallback path: Hugging Face ASR candidates + Groq Llama.
+      // 2. Fallback path: speech-to-text candidates + text LLM.
+      // Tries Spitch (Nigerian ASR, if configured) then the Hugging Face Space.
       if (!extraction) {
-        let asrCandidates: AsrCandidate[];
-        try {
-          asrCandidates = await this.groqService.transcribeCandidates(
-            processedAudio.buffer,
-            processedAudio.mimetype,
-          );
-        } catch (asrError) {
-          if (!processedAudio.wasProcessed) throw asrError;
-          this.logger.warn(
-            `[VoiceService] Processed audio ASR failed, retrying original audio: ${(asrError as Error).message}`,
-          );
-          asrCandidates = await this.groqService.transcribeCandidates(
-            file.buffer,
-            file.mimetype,
-          );
-        }
+        const asrCandidates = await this.transcribeWithFallbacks(
+          file,
+          processedAudio,
+          customers,
+          products,
+        );
         scoredCandidates = this.rankAsrCandidates(
           asrCandidates,
           products,
@@ -97,7 +90,7 @@ export class VoiceService {
             file.mimetype,
           ));
         transcript = transcriptResult.text;
-        detectedLanguage = transcriptResult.language as 'yo' | 'en';
+        detectedLanguage = transcriptResult.language as 'yo' | 'en' | 'pcm';
         extraction = await this.groqService.extractStructuredData(
           transcript,
           shopContext,
@@ -343,6 +336,67 @@ export class VoiceService {
     return Number.isFinite(n) && n > 0 ? n : 0;
   }
 
+  /**
+   * Speech-to-text providers in order: Spitch (if SPITCH_API_KEY is set),
+   * then the Hugging Face Space. The first that returns anything wins.
+   */
+  private async transcribeWithFallbacks(
+    original: { buffer: Buffer; mimetype: string },
+    processed: { buffer: Buffer; mimetype: string; wasProcessed?: boolean },
+    customers: any[],
+    products: any[],
+  ): Promise<AsrCandidate[]> {
+    const errors: string[] = [];
+
+    if (this.spitchService.isEnabled()) {
+      try {
+        return await this.spitchService.transcribeCandidates(
+          processed.buffer,
+          processed.mimetype,
+          this.buildSpecialWords(customers, products),
+        );
+      } catch (error) {
+        errors.push(`Spitch: ${(error as Error).message}`);
+        this.logger.warn(`[VoiceService] Spitch ASR failed, trying HF Space`);
+      }
+    }
+
+    try {
+      return await this.groqService.transcribeCandidates(
+        processed.buffer,
+        processed.mimetype,
+      );
+    } catch (error) {
+      errors.push(`HF: ${(error as Error).message}`);
+      if (processed.wasProcessed) {
+        try {
+          return await this.groqService.transcribeCandidates(
+            original.buffer,
+            original.mimetype,
+          );
+        } catch (retryError) {
+          errors.push(`HF original: ${(retryError as Error).message}`);
+        }
+      }
+    }
+
+    throw new Error(`All speech-to-text providers failed (${errors.join('; ')})`);
+  }
+
+  /** Customer names, nicknames and product names, used as ASR hints. */
+  private buildSpecialWords(customers: any[], products: any[]): string[] {
+    const words = new Set<string>();
+    for (const customer of customers || []) {
+      [customer.name, ...(customer.aliases || [])]
+        .filter(Boolean)
+        .forEach((w: string) => words.add(String(w).trim()));
+    }
+    for (const product of products || []) {
+      if (product?.name) words.add(String(product.name).trim());
+    }
+    return [...words].filter((w) => w.length > 1);
+  }
+
   private rankAsrCandidates(
     candidates: AsrCandidate[],
     products: any[],
@@ -386,6 +440,10 @@ export class VoiceService {
       'ta',
       'owo',
       'owó',
+      'don',
+      'dey',
+      'carry',
+      'take',
     ];
     if (transactionMarkers.some((marker) => text.includes(marker))) score += 8;
 

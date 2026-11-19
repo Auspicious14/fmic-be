@@ -19,6 +19,10 @@ export class User {
 
   @Prop({ default: 'admin' })
   role: string;
+
+  /** WhatsApp number linked to this shop, digits only, e.g. 2348031234567. */
+  @Prop({ index: { unique: true, sparse: true } })
+  whatsappPhone?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

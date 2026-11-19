@@ -1,4 +1,4 @@
-import { Controller, Post, Body, HttpCode, HttpStatus, Get, UseGuards } from '@nestjs/common';
+import { Controller, Post, Body, HttpCode, HttpStatus, Get, UseGuards, Patch } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
@@ -32,5 +32,13 @@ export class AuthController {
   @ApiResponse({ status: 200, description: 'Return current user profile' })
   async getProfile(@GetUser() user: any) {
     return this.authService.validateUser(user);
+  }
+
+  @Patch('whatsapp')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Link the WhatsApp number this shop will message Ledga from' })
+  async setWhatsapp(@GetUser() user: any, @Body() body: { phone?: string | null }) {
+    return this.authService.setWhatsappPhone(user.userId, body?.phone ?? null);
   }
 }
