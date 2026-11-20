@@ -11,6 +11,7 @@ import { GroqService } from './services/groq.service';
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 import { GeminiService } from './services/gemini.service';
 import { SpitchService } from './services/spitch.service';
+import { IntronService } from './services/intron.service';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { SpitchService } from './services/spitch.service';
     AudioPreprocessorService,
     GeminiService,
     SpitchService,
+    IntronService,
   ],
   controllers: [VoiceController],
   exports: [VoiceService],

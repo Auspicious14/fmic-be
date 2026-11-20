@@ -12,6 +12,7 @@ import { LanguageDetectionService } from './services/language-detection.service'
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 import { GeminiService } from './services/gemini.service';
 import { SpitchService } from './services/spitch.service';
+import { IntronService } from './services/intron.service';
 
 describe('VoiceService', () => {
   let service: VoiceService;
@@ -40,8 +41,12 @@ describe('VoiceService', () => {
     getDailySummary: jest.fn().mockResolvedValue([]),
   };
 
+  // Settings the voice pipeline reads; anything else returns 'true' as before.
+  let configOverrides: Record<string, string | undefined> = {};
   const mockConfigService = {
-    get: jest.fn().mockReturnValue('true'),
+    get: jest.fn((key: string) =>
+      key in configOverrides ? configOverrides[key] : ['VOICE_PRIMARY', 'ASR_PROVIDERS'].includes(key) ? undefined : 'true',
+    ),
   };
 
   const mockGroqService = {
@@ -97,6 +102,11 @@ describe('VoiceService', () => {
     })),
   };
 
+  const mockIntronService = {
+    isEnabled: jest.fn().mockReturnValue(false),
+    transcribeCandidates: jest.fn(),
+  };
+
   const mockSpitchService = {
     isEnabled: jest.fn().mockReturnValue(false),
     transcribeCandidates: jest.fn(),
@@ -111,6 +121,8 @@ describe('VoiceService', () => {
     jest.clearAllMocks();
     mockGeminiService.isEnabled.mockReturnValue(false);
     mockSpitchService.isEnabled.mockReturnValue(false);
+    mockIntronService.isEnabled.mockReturnValue(false);
+    configOverrides = {};
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         VoiceService,
@@ -134,6 +146,7 @@ describe('VoiceService', () => {
         },
         { provide: GeminiService, useValue: mockGeminiService },
         { provide: SpitchService, useValue: mockSpitchService },
+        { provide: IntronService, useValue: mockIntronService },
       ],
     }).compile();
 
@@ -366,5 +379,85 @@ describe('VoiceService', () => {
     );
 
     expect(mockGroqService.transcribeCandidates).toHaveBeenCalled();
+  });
+
+  it('tries Intron before Spitch by default', async () => {
+    mockIntronService.isEnabled.mockReturnValue(true);
+    mockSpitchService.isEnabled.mockReturnValue(true);
+    mockIntronService.transcribeCandidates.mockResolvedValueOnce([
+      { text: 'Babatunde Adekunle collect two Indomie', confidence: 0.85, language: 'pcm' },
+    ]);
+
+    const result = await service.processAudio(
+      { buffer: Buffer.from('audio'), mimetype: 'audio/wav' },
+      'user-id',
+    );
+
+    expect(mockIntronService.transcribeCandidates).toHaveBeenCalled();
+    expect(mockSpitchService.transcribeCandidates).not.toHaveBeenCalled();
+    expect(result.overall_transcript).toBe('Babatunde Adekunle collect two Indomie');
+  });
+
+  it('falls through Intron -> Spitch when Intron fails', async () => {
+    mockIntronService.isEnabled.mockReturnValue(true);
+    mockSpitchService.isEnabled.mockReturnValue(true);
+    mockIntronService.transcribeCandidates.mockRejectedValueOnce(new Error('Intron 503'));
+    mockSpitchService.transcribeCandidates.mockResolvedValueOnce([
+      { text: 'Babatunde Adekunle collect Indomie', confidence: 0.8, language: 'pcm' },
+    ]);
+
+    await service.processAudio({ buffer: Buffer.from('a'), mimetype: 'audio/wav' }, 'user-id');
+
+    expect(mockSpitchService.transcribeCandidates).toHaveBeenCalled();
+    expect(mockGroqService.transcribeCandidates).not.toHaveBeenCalled();
+  });
+
+  it('respects ASR_PROVIDERS order', async () => {
+    configOverrides.ASR_PROVIDERS = 'spitch,intron';
+    mockIntronService.isEnabled.mockReturnValue(true);
+    mockSpitchService.isEnabled.mockReturnValue(true);
+    mockSpitchService.transcribeCandidates.mockResolvedValueOnce([
+      { text: 'Babatunde Adekunle collect Indomie', confidence: 0.8, language: 'pcm' },
+    ]);
+
+    await service.processAudio({ buffer: Buffer.from('a'), mimetype: 'audio/wav' }, 'user-id');
+
+    expect(mockSpitchService.transcribeCandidates).toHaveBeenCalled();
+    expect(mockIntronService.transcribeCandidates).not.toHaveBeenCalled();
+  });
+
+  it('with VOICE_PRIMARY=asr, runs speech-to-text first and only uses Gemini as fallback', async () => {
+    configOverrides.VOICE_PRIMARY = 'asr';
+    mockGeminiService.isEnabled.mockReturnValue(true);
+    mockIntronService.isEnabled.mockReturnValue(true);
+    mockIntronService.transcribeCandidates.mockResolvedValueOnce([
+      { text: 'Babatunde Adekunle collect Indomie', confidence: 0.85, language: 'yo' },
+    ]);
+
+    await service.processAudio({ buffer: Buffer.from('a'), mimetype: 'audio/wav' }, 'user-id');
+
+    expect(mockIntronService.transcribeCandidates).toHaveBeenCalled();
+    expect(mockGeminiService.extractFromAudio).not.toHaveBeenCalled();
+  });
+
+  it('with VOICE_PRIMARY=asr, uses Gemini when every ASR provider fails', async () => {
+    configOverrides.VOICE_PRIMARY = 'asr';
+    configOverrides.ASR_PROVIDERS = 'intron';
+    mockGeminiService.isEnabled.mockReturnValue(true);
+    mockIntronService.isEnabled.mockReturnValue(true);
+    mockIntronService.transcribeCandidates.mockRejectedValueOnce(new Error('down'));
+    mockGeminiService.extractFromAudio.mockResolvedValueOnce({
+      transcript: 'Babatunde collect Indomie',
+      language: 'pcm',
+      transactions: [],
+    });
+
+    const result = await service.processAudio(
+      { buffer: Buffer.from('a'), mimetype: 'audio/wav' },
+      'user-id',
+    );
+
+    expect(mockGeminiService.extractFromAudio).toHaveBeenCalled();
+    expect(result.overall_transcript).toBe('Babatunde collect Indomie');
   });
 });

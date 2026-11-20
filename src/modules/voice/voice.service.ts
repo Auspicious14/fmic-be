@@ -15,6 +15,7 @@ import { CustomerResolverService } from '../customers/customer-resolver.service'
 import { LanguageDetectionService } from './services/language-detection.service';
 import { GeminiService } from './services/gemini.service';
 import { SpitchService } from './services/spitch.service';
+import { IntronService } from './services/intron.service';
 import { buildShopContextBlock } from './constants/shop-context';
 import { AudioPreprocessorService } from './services/audio-preprocessor.service';
 
@@ -34,6 +35,7 @@ export class VoiceService {
     private audioPreprocessorService: AudioPreprocessorService,
     private geminiService: GeminiService,
     private spitchService: SpitchService,
+    private intronService: IntronService,
   ) {}
 
   async processAudio(
@@ -48,12 +50,17 @@ export class VoiceService {
       const shopContext = buildShopContextBlock(customers, products);
 
       let transcript = '';
-      let detectedLanguage: VoiceOutputDto['detectedLanguage'] = 'en';
-      let extraction: { transactions?: any[] } | null = null;
+      // Assigned inside runGemini/runAsr below, so widen the types explicitly.
+      let detectedLanguage = 'en' as VoiceOutputDto['detectedLanguage'];
+      let extraction = null as { transactions?: any[] } | null;
       let scoredCandidates: Array<AsrCandidate & { score: number }> = [];
 
-      // 1. Preferred path: Gemini hears the audio directly (one call, free tier).
-      if (this.geminiService.isEnabled()) {
+      // Two ways to understand a voice note:
+      //  - "gemini": Gemini hears the audio and extracts in one call.
+      //  - "asr":    speech-to-text (Intron / Spitch / HF) + text LLM.
+      // VOICE_PRIMARY picks which runs first; the other is the fallback.
+      const runGemini = async (): Promise<boolean> => {
+        if (!this.geminiService.isEnabled()) return false;
         try {
           const gemini = await this.geminiService.extractFromAudio(
             processedAudio,
@@ -62,16 +69,16 @@ export class VoiceService {
           transcript = gemini.transcript;
           detectedLanguage = gemini.language;
           extraction = { transactions: gemini.transactions };
+          return true;
         } catch (geminiError) {
           this.logger.warn(
-            `[VoiceService] Gemini failed, falling back to ASR + Llama: ${(geminiError as Error).message}`,
+            `[VoiceService] Gemini failed: ${(geminiError as Error).message}`,
           );
+          return false;
         }
-      }
+      };
 
-      // 2. Fallback path: speech-to-text candidates + text LLM.
-      // Tries Spitch (Nigerian ASR, if configured) then the Hugging Face Space.
-      if (!extraction) {
+      const runAsr = async (): Promise<void> => {
         const asrCandidates = await this.transcribeWithFallbacks(
           file,
           processedAudio,
@@ -95,6 +102,20 @@ export class VoiceService {
           transcript,
           shopContext,
         );
+      };
+
+      const primary = this.configService.get<string>('VOICE_PRIMARY') || 'gemini';
+      if (primary === 'asr') {
+        try {
+          await runAsr();
+        } catch (asrError) {
+          this.logger.warn(
+            `[VoiceService] ASR path failed, trying Gemini: ${(asrError as Error).message}`,
+          );
+          if (!(await runGemini())) throw asrError;
+        }
+      } else if (!(await runGemini())) {
+        await runAsr();
       }
 
       const ttsLang = detectedLanguage === 'yo' ? 'yo-NG' : 'pcm-NG';
@@ -337,8 +358,8 @@ export class VoiceService {
   }
 
   /**
-   * Speech-to-text providers in order: Spitch (if SPITCH_API_KEY is set),
-   * then the Hugging Face Space. The first that returns anything wins.
+   * Speech-to-text providers in ASR_PROVIDERS order (Intron, Spitch, then the
+   * Hugging Face Space by default). The first that returns anything wins.
    */
   private async transcribeWithFallbacks(
     original: { buffer: Buffer; mimetype: string },
@@ -347,36 +368,45 @@ export class VoiceService {
     products: any[],
   ): Promise<AsrCandidate[]> {
     const errors: string[] = [];
+    // Order from ASR_PROVIDERS (default intron,spitch,hf); unconfigured ones are skipped.
+    const order = (
+      this.configService.get<string>('ASR_PROVIDERS') || 'intron,spitch,hf'
+    )
+      .split(',')
+      .map((p) => p.trim().toLowerCase());
 
-    if (this.spitchService.isEnabled()) {
+    for (const provider of order) {
       try {
-        return await this.spitchService.transcribeCandidates(
-          processed.buffer,
-          processed.mimetype,
-          this.buildSpecialWords(customers, products),
-        );
-      } catch (error) {
-        errors.push(`Spitch: ${(error as Error).message}`);
-        this.logger.warn(`[VoiceService] Spitch ASR failed, trying HF Space`);
-      }
-    }
-
-    try {
-      return await this.groqService.transcribeCandidates(
-        processed.buffer,
-        processed.mimetype,
-      );
-    } catch (error) {
-      errors.push(`HF: ${(error as Error).message}`);
-      if (processed.wasProcessed) {
-        try {
-          return await this.groqService.transcribeCandidates(
-            original.buffer,
-            original.mimetype,
+        if (provider === 'intron' && this.intronService.isEnabled()) {
+          return await this.intronService.transcribeCandidates(
+            processed.buffer,
+            processed.mimetype,
           );
-        } catch (retryError) {
-          errors.push(`HF original: ${(retryError as Error).message}`);
         }
+        if (provider === 'spitch' && this.spitchService.isEnabled()) {
+          return await this.spitchService.transcribeCandidates(
+            processed.buffer,
+            processed.mimetype,
+            this.buildSpecialWords(customers, products),
+          );
+        }
+        if (provider === 'hf') {
+          try {
+            return await this.groqService.transcribeCandidates(
+              processed.buffer,
+              processed.mimetype,
+            );
+          } catch (error) {
+            if (!processed.wasProcessed) throw error;
+            return await this.groqService.transcribeCandidates(
+              original.buffer,
+              original.mimetype,
+            );
+          }
+        }
+      } catch (error) {
+        errors.push(`${provider}: ${(error as Error).message}`);
+        this.logger.warn(`[VoiceService] ${provider} ASR failed, trying next`);
       }
     }
 

@@ -71,6 +71,11 @@ npm run test
 | `GROQ_MODEL` | Groq model for the fallback LLM | `openai/gpt-oss-120b` |
 | `HF_SPACE_URL` | Hugging Face Space with `/asr/yoruba` and `/asr/english` (fallback only) | — |
 | `REDIS_URL` | Optional. Caches LLM parses. Leave unset on free hosting. | — |
+| `INTRON_API_KEY` | Intron Sahara key (voice.intron.io): code-switched speech-to-text for Pidgin-English and Yoruba-English | — |
+| `INTRON_ASR_LANGUAGES` | Sahara models to run per voice note (each is billed): `pcm`, `yo`, `en` | `pcm,yo` |
+| `INTRON_DISABLE_LLM_CORRECTIONS` | `true` to turn off Intron's own transcript clean-up | `false` |
+| `ASR_PROVIDERS` | Speech-to-text order; unconfigured providers are skipped | `intron,spitch,hf` |
+| `VOICE_PRIMARY` | `gemini`: Gemini hears the audio first, speech-to-text is the fallback. `asr`: speech-to-text + LLM first, Gemini is the fallback | `gemini` |
 | `SPITCH_API_KEY` | Spitch (spitch.app) key: Nigerian speech-to-text (Yoruba, Pidgin, English) as the fallback after Gemini, and Pidgin/Yoruba voices for spoken replies | — |
 | `SPITCH_ASR_LANGUAGES` | Languages to transcribe each voice note in (each one is billed) | `yo,pi,en` |
 | `SPITCH_VOICE_PCM` / `SPITCH_VOICE_YO` | Voices for spoken replies | `ufoma` / `sade` |
