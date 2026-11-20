@@ -29,7 +29,7 @@ export function verifyLink(kind: string, id: string, signature?: string): boolea
 
 /** Public base URL of this API, e.g. https://ledga-api.vercel.app (no /api). */
 export function publicApiUrl(): string | null {
-  const url = process.env.PUBLIC_API_URL;
+  const url = process.env.BACKEND_API_URL;
   return url ? url.replace(/\/+$/, '') : null;
 }
 

@@ -39,7 +39,7 @@ describe('PaymentsService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    process.env.PUBLIC_API_URL = 'https://api.example.com';
+    process.env.BACKEND_API_URL = 'https://api.example.com';
     global.fetch = fetchMock as unknown as typeof fetch;
     customer = {
       _id: customerId,

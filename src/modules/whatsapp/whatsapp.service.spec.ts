@@ -81,7 +81,7 @@ describe('WhatsappService', () => {
     jest.clearAllMocks();
     linkedUser = user;
     pending = null;
-    process.env.PUBLIC_API_URL = 'https://api.example.com';
+    process.env.BACKEND_API_URL = 'https://api.example.com';
   });
 
   it('tells an unknown number how to link their shop', async () => {
