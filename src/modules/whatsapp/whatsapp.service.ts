@@ -139,10 +139,22 @@ export class WhatsappService {
       return this.sendDailySummary(from, userId);
     }
 
+    // No ₦0 debts: a sale heard without any price is sent back, not saved.
+    const unpriced = transactions.filter((t) => t.needs_price);
     const recordable = transactions.filter(
-      (t) => RECORDABLE.includes(t.intent) && !t.resolvedCustomer?.isAmbiguous,
+      (t) =>
+        RECORDABLE.includes(t.intent) &&
+        !t.resolvedCustomer?.isAmbiguous &&
+        !t.needs_price,
     );
     const ambiguous = transactions.filter((t) => t.resolvedCustomer?.isAmbiguous && RECORDABLE.includes(t.intent));
+
+    if (recordable.length === 0 && unpriced.length) {
+      return this.api.sendText(
+        from,
+        `I hear ${this.describe(unpriced[0]).replace(/ owes ₦0/, ' bought something')}, but I no hear the price. Abeg send am again with the total, e.g. "… 2 peak milk, 800 naira".`,
+      );
+    }
 
     if (recordable.length === 0) {
       const hint = ambiguous.length
@@ -163,11 +175,22 @@ export class WhatsappService {
       { upsert: true },
     );
 
-    const lines = recordable.map((t, i) => `${i + 1}. ${this.describe(t)}`);
+    const lines = recordable.map((t, i) => {
+      const warnings = (t.warnings ?? []).map((w: string) => `   ⚠️ ${w}`);
+      return [`${i + 1}. ${this.describe(t)}`, ...warnings].join('\n');
+    });
     const heard = result?.overall_transcript ? `I heard: "${result.overall_transcript}"\n\n` : '';
-    const skipped = ambiguous.length
-      ? `\n\n(Skipped "${ambiguous[0].resolvedCustomer?.name}": not sure which customer.)`
-      : '';
+    const skipped = [
+      ambiguous.length
+        ? `(Skipped "${ambiguous[0].resolvedCustomer?.name}": not sure which customer.)`
+        : '',
+      unpriced.length
+        ? `(Skipped ${unpriced[0].resolvedCustomer?.name ?? 'one sale'}: no price heard. Send it again with the total.)`
+        : '',
+    ]
+      .filter(Boolean)
+      .map((line) => `\n\n${line}`)
+      .join('');
     await this.api.sendButtons(
       from,
       `${heard}${lines.join('\n')}${skipped}\n\nMake I save am?`,

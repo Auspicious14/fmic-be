@@ -22,6 +22,7 @@ RULES:
 - IMPORTANT: Support multiple transactions in a single command. If the user mentions multiple people (e.g., "Tunde and Kunle bought bread"), return an array of transactions.
 - "quantity" is the number of units bought. "price" is the price of ONE unit. "amount" is the total money for that transaction (sum of quantity x price for a credit sale; the money paid for a payment).
 - If a SHOP CONTEXT block is provided: when the speaker refers to a known customer or product, use the exact spelling from the context (transcripts often misspell names). If a unit price is not spoken, use the product's known unit price. Do NOT invent customers who are not mentioned.
+- "remaining_balance": ONLY if the speaker says how much is still owed after this entry ("e remain 10000", "ó kù 10000", "balance na 10000", "she still owe 2k"), put that number; otherwise null. Never calculate it yourself.
 - If the speaker gives a total but no unit price, set "price" to 0 and put the total in "amount".
 - YORUBA: "X ra" / "X ó ra" / "X gbà" / "X mú" means X bought/took on credit, so the word(s) just before ra/gbà/mú are the buyer's name. "X san" means X paid. "ó jẹ́" / "máa jẹ́" introduces the total. Numbers may be in Yoruba (kan, méjì, mẹ́ta, mẹ́rin, márùn-ún) or digits.
 - TRANSCRIPTS ARE IMPERFECT: speech-to-text often splits or tone-marks a name into syllables (e.g. "gàá ní ò rá àkàrá" is "Gani ó ra akara" = Gani bought akara). Join the syllables into the most likely name, preferring a KNOWN CUSTOMER that sounds similar.
@@ -45,7 +46,8 @@ JSON SCHEMA:
             "price": number
           }
         ],
-        "type": "credit | payment | adjustment | price_update"
+        "type": "credit | payment | adjustment | price_update",
+        "remaining_balance": number | null
       },
       "confidence_score": number (0.0 to 1.0),
       "reasoning_summary": "string"

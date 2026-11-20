@@ -516,4 +516,91 @@ describe('VoiceService', () => {
     expect(result.transactions[0].total_amount).toBe(1000);
     expect(result.transactions[0].items[0].unit_price).toBe(333.33);
   });
+
+  describe('checks against the ledger', () => {
+    const owes = (balance: number) =>
+      mockCustomersService.findAll.mockResolvedValueOnce({
+        customers: [{ _id: 'cust-1', name: 'Babatunde Adekunle', outstandingBalance: balance }],
+        total: 1,
+      });
+    const heard = (...transactions: any[]) =>
+      mockGroqService.extractStructuredData.mockResolvedValueOnce({ transactions });
+    const payment = (amount: number, remaining: number | null = null) => ({
+      intent: VoiceIntent.PAYMENT,
+      data: { debtor: 'Babatunde', amount, remaining_balance: remaining },
+      confidence_score: 0.9,
+      reasoning_summary: 'payment',
+    });
+
+    it('"Kamau don pay 5000, e remain 10000" when he owed nothing: two warnings (20 Nov test)', async () => {
+      owes(0);
+      heard(payment(5000, 10000));
+
+      const tx = (await service.processTranscript({ transcript: 'x' }, 'user-id')).transactions[0];
+
+      expect(tx.current_balance).toBe(0);
+      expect(tx.balance_after).toBe(-5000);
+      expect(tx.stated_remaining).toBe(10000);
+      expect(tx.warnings).toEqual([
+        "Babatunde Adekunle doesn't owe you anything. Saving this puts them ₦5,000 in credit.",
+        'You said ₦10,000 remains, but Ledga will have ₦0 owed. Is a debt missing? Record it first.',
+      ]);
+      expect(tx.voice_confirmation).toContain('Abeg check the screen');
+    });
+
+    it('stays quiet when the payment and the remaining amount match the ledger', async () => {
+      owes(15000);
+      heard(payment(5000, 10000));
+
+      const tx = (await service.processTranscript({ transcript: 'x' }, 'user-id')).transactions[0];
+
+      expect(tx.warnings).toEqual([]);
+      expect(tx.balance_after).toBe(10000);
+      expect(tx.voice_confirmation).not.toContain('check the screen');
+    });
+
+    it('warns when a payment is bigger than what is owed', async () => {
+      owes(3000);
+      heard(payment(5000));
+      const tx = (await service.processTranscript({ transcript: 'x' }, 'user-id')).transactions[0];
+      expect(tx.warnings).toEqual([
+        'Babatunde Adekunle only owes ₦3,000. Saving this puts them ₦2,000 in credit.',
+      ]);
+    });
+
+    it('flags a credit sale with no price instead of offering ₦0 (Baba Sola test)', async () => {
+      heard({
+        intent: VoiceIntent.CREDIT_SALE,
+        data: { debtor: 'Babatunde', amount: 0, items: [{ name: 'pick mic', quantity: 2, price: 0 }] },
+        confidence_score: 0.55,
+        reasoning_summary: 'no price',
+      });
+
+      const tx = (await service.processTranscript({ transcript: 'x' }, 'user-id')).transactions[0];
+
+      expect(tx.needs_price).toBe(true);
+      expect(tx.total_amount).toBe(0);
+      expect(tx.voice_confirmation).toContain('I no hear the price');
+    });
+
+    it('chains a sale and a payment in the same voice note', async () => {
+      owes(0);
+      heard(
+        {
+          intent: VoiceIntent.CREDIT_SALE,
+          data: { debtor: 'Babatunde', amount: 3000, items: [] },
+          confidence_score: 0.9,
+          reasoning_summary: 'sale',
+        },
+        payment(1000, 2000),
+      );
+
+      const [sale, paid] = (await service.processTranscript({ transcript: 'x' }, 'user-id')).transactions;
+
+      expect(sale.balance_after).toBe(3000);
+      expect(paid.current_balance).toBe(3000);
+      expect(paid.balance_after).toBe(2000);
+      expect(paid.warnings).toEqual([]);
+    });
+  });
 });

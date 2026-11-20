@@ -139,6 +139,7 @@ export class VoiceService {
         extraction ?? {},
         products,
         userId,
+        customers,
       );
 
       // Generate TTS audio for the first transaction's confirmation
@@ -196,7 +197,13 @@ export class VoiceService {
       transcript,
       shopContext,
     );
-    return this.buildTransactions(transcript, llamaResult, products, userId);
+    return this.buildTransactions(
+      transcript,
+      llamaResult,
+      products,
+      userId,
+      customers,
+    );
   }
 
   /**
@@ -208,9 +215,13 @@ export class VoiceService {
     extraction: { transactions?: any[] },
     products: any[],
     userId: string,
+    customers: any[] = [],
   ): Promise<VoiceOutputDto> {
     const rawTransactions = extraction?.transactions || [];
     const processedTransactions: VoiceTransactionData[] = [];
+    // Running balance per customer, so a sale then a payment in one voice
+    // note are checked against each other.
+    const runningBalance = new Map<string, number>();
 
     for (const rawTx of rawTransactions) {
       if (!rawTx.data?.debtor && rawTx.intent !== VoiceIntent.DAILY_SUMMARY) {
@@ -316,6 +327,20 @@ export class VoiceService {
         transactionType = 'adjustment';
       }
 
+      const checks = this.checkAgainstLedger(
+        rawTx,
+        resolvedCustomer,
+        customerDisplayName,
+        transactionAmount,
+        customers,
+        runningBalance,
+      );
+      if (checks.needs_price) {
+        confirmationText = `I hear the sale for ${customerDisplayName}, but I no hear the price. Abeg type the total.`;
+      } else if (checks.warnings.length) {
+        confirmationText = `${confirmationText} Abeg check the screen before you save.`;
+      }
+
       processedTransactions.push({
         intent: rawTx.intent as VoiceIntent,
         resolvedCustomer,
@@ -326,12 +351,90 @@ export class VoiceService {
         confidence_score: rawTx.confidence_score,
         reasoning_summary: rawTx.reasoning_summary,
         voice_confirmation: confirmationText,
+        ...checks,
       });
     }
 
     return {
       transactions: processedTransactions,
       overall_transcript: transcript,
+    };
+  }
+
+  /**
+   * Compares what was heard with what the ledger already knows, so the trader
+   * sees a problem before saving rather than in an argument later:
+   *  - a credit sale with no price at all (would save as ₦0)
+   *  - a payment bigger than what the customer owes
+   *  - "e remain 10000" when the ledger says something else
+   */
+  private checkAgainstLedger(
+    rawTx: any,
+    resolvedCustomer: { customerId?: string; isNew?: boolean; isAmbiguous?: boolean },
+    displayName: string,
+    amount: number,
+    customers: any[],
+    runningBalance: Map<string, number>,
+  ): {
+    warnings: string[];
+    needs_price?: boolean;
+    current_balance?: number;
+    balance_after?: number;
+    stated_remaining?: number;
+  } {
+    const warnings: string[] = [];
+    const naira = (n: number) => `₦${Math.round(n).toLocaleString('en-NG')}`;
+    const isCredit = rawTx.intent === VoiceIntent.CREDIT_SALE;
+    const isPayment = rawTx.intent === VoiceIntent.PAYMENT;
+
+    if (isCredit && !(amount > 0)) {
+      warnings.push('No price was heard. Type the total before saving.');
+      return { warnings, needs_price: true };
+    }
+    if ((!isCredit && !isPayment) || resolvedCustomer.isAmbiguous) {
+      return { warnings };
+    }
+
+    // Balance before this entry: known customers from the ledger, new ones start at 0.
+    const key = resolvedCustomer.customerId ?? `new:${displayName.toLowerCase()}`;
+    let before = runningBalance.get(key);
+    if (before === undefined) {
+      const existing = resolvedCustomer.customerId
+        ? customers.find((c) => c?._id?.toString() === resolvedCustomer.customerId)
+        : undefined;
+      if (resolvedCustomer.customerId && !existing) return { warnings };
+      before = Number(existing?.outstandingBalance) || 0;
+    }
+    const after = isCredit ? before + amount : before - amount;
+    runningBalance.set(key, after);
+
+    if (isPayment && amount > before) {
+      warnings.push(
+        before <= 0
+          ? `${displayName} doesn't owe you anything. Saving this puts them ${naira(amount - before)} in credit.`
+          : `${displayName} only owes ${naira(before)}. Saving this puts them ${naira(amount - before)} in credit.`,
+      );
+    }
+
+    const statedRaw = rawTx.data?.remaining_balance;
+    const stated =
+      statedRaw === null || statedRaw === undefined || statedRaw === ''
+        ? undefined
+        : Number(String(statedRaw).replace(/,/g, ''));
+    const hasStated = stated !== undefined && Number.isFinite(stated) && stated >= 0;
+    if (hasStated && Math.abs((stated as number) - after) >= 1) {
+      warnings.push(
+        (stated as number) > after
+          ? `You said ${naira(stated as number)} remains, but Ledga will have ${naira(Math.max(after, 0))} owed. Is a debt missing? Record it first.`
+          : `You said ${naira(stated as number)} remains, but Ledga will have ${naira(after)} owed. Check the amounts.`,
+      );
+    }
+
+    return {
+      warnings,
+      current_balance: before,
+      balance_after: after,
+      ...(hasStated ? { stated_remaining: stated } : {}),
     };
   }
 

@@ -72,6 +72,21 @@ export class VoiceTransactionData {
 
   @ApiProperty({ required: false })
   voice_confirmation?: string;
+
+  @ApiProperty({ required: false, description: 'What the customer owed before this entry (known customers only)' })
+  current_balance?: number;
+
+  @ApiProperty({ required: false, description: 'What the customer will owe after this entry' })
+  balance_after?: number;
+
+  @ApiProperty({ required: false, description: 'Amount the trader said is still owed, if they said one' })
+  stated_remaining?: number;
+
+  @ApiProperty({ required: false, type: [String], description: 'Things the trader should check before saving' })
+  warnings?: string[];
+
+  @ApiProperty({ required: false, description: 'Credit sale heard without any price; must not be saved at ₦0' })
+  needs_price?: boolean;
 }
 
 export class VoiceOutputDto {

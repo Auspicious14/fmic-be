@@ -173,4 +173,41 @@ describe('WhatsappService', () => {
     expect(api.sendButtons).not.toHaveBeenCalled();
     expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('talk am again'));
   });
+
+  it('shows ledger warnings next to the entry', async () => {
+    voiceService.processTranscript.mockResolvedValue({
+      transactions: [
+        {
+          intent: VoiceIntent.PAYMENT,
+          resolvedCustomer: { name: 'Kamau', customerId: 'c1', isNew: false, isAmbiguous: false },
+          items: [],
+          total_amount: 5000,
+          amount: 5000,
+          warnings: ["Kamau doesn't owe you anything. Saving this puts them ₦5,000 in credit."],
+        },
+      ],
+    });
+    await service.handleMessage({ id: 'w1', from: phone, type: 'text', text: { body: 'Kamau don pay 5000' } });
+    const [, body] = api.sendButtons.mock.calls[0];
+    expect(body).toContain('Kamau paid ₦5,000');
+    expect(body).toContain("⚠️ Kamau doesn't owe you anything");
+  });
+
+  it('never offers to save a sale with no price', async () => {
+    voiceService.processTranscript.mockResolvedValue({
+      transactions: [
+        {
+          intent: VoiceIntent.CREDIT_SALE,
+          needs_price: true,
+          resolvedCustomer: { name: 'Baba Sola', isNew: true, isAmbiguous: false },
+          items: [{ product_name: 'peak milk', quantity: 2, unit_price: 0 }],
+          total_amount: 0,
+        },
+      ],
+    });
+    await service.handleMessage({ id: 'w2', from: phone, type: 'text', text: { body: 'Baba Sola mu peak milk meji' } });
+    expect(api.sendButtons).not.toHaveBeenCalled();
+    expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('I no hear the price'));
+    expect(pending).toBeNull();
+  });
 });
