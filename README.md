@@ -74,7 +74,7 @@ npm run test
 | `SPITCH_API_KEY` | Spitch (spitch.app) key: Nigerian speech-to-text (Yoruba, Pidgin, English) as the fallback after Gemini, and Pidgin/Yoruba voices for spoken replies | — |
 | `SPITCH_ASR_LANGUAGES` | Languages to transcribe each voice note in (each one is billed) | `yo,pi,en` |
 | `SPITCH_VOICE_PCM` / `SPITCH_VOICE_YO` | Voices for spoken replies | `ufoma` / `sade` |
-| `PUBLIC_API_URL` | Public URL of this API, without `/api` (used in receipt and payment links) | — |
+| `BACKEND_API_URL` | Public URL of this API, without `/api` (used in receipt and payment links) | — |
 | `LINK_SIGNING_SECRET` | Secret for signing public receipt/payment links (falls back to `JWT_SECRET`) | — |
 | `FLW_SECRET_KEY` | Flutterwave secret key. Enables "Pay now" on receipts | — |
 | `FLW_SECRET_HASH` | The secret hash you set under Flutterwave → Settings → Webhooks | — |
