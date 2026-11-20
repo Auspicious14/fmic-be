@@ -89,6 +89,58 @@ describe('TransactionsService', () => {
     gateway = module.get(RealtimeGateway);
   });
 
+  describe('priceItems (total said, item prices not)', () => {
+    const price = (items: any[], amount?: number) =>
+      (service as any).priceItems(items, amount);
+
+    it('"Gani ó ra akara mẹta, ó jẹ 1000" saves ₦1,000, not ₦0', () => {
+      const { totalAmount, transactionItems } = price(
+        [{ productName: 'akara', quantity: 3, unitPriceAtSale: 0 }],
+        1000,
+      );
+      expect(totalAmount).toBe(1000);
+      expect(transactionItems[0].unitPriceAtSale).toBe(333.33);
+      expect(transactionItems[0].totalPrice).toBe(1000);
+    });
+
+    it('lines add up exactly when the preview already sent 333.33 each', () => {
+      const { totalAmount, transactionItems } = price(
+        [{ productName: 'akara', quantity: 3, unitPriceAtSale: 333.33 }],
+        1000,
+      );
+      expect(totalAmount).toBe(1000);
+      expect(transactionItems[0].totalPrice).toBe(1000);
+    });
+
+    it('fills only the unpriced items with what is left of the total', () => {
+      const { totalAmount, transactionItems } = price(
+        [
+          { productName: 'rice', quantity: 1, unitPriceAtSale: 5000 },
+          { productName: 'milk', quantity: 2, unitPriceAtSale: 0 },
+        ],
+        6000,
+      );
+      expect(totalAmount).toBe(6000);
+      expect(transactionItems[1].unitPriceAtSale).toBe(500);
+      expect(transactionItems[1].totalPrice).toBe(1000);
+    });
+
+    it('keeps item maths when every item is priced and the total differs', () => {
+      const { totalAmount } = price(
+        [{ productName: 'rice', quantity: 2, unitPriceAtSale: 5000 }],
+        8000,
+      );
+      expect(totalAmount).toBe(10000);
+    });
+
+    it('behaves as before when no amount is given', () => {
+      const { totalAmount } = price([
+        { productName: 'rice', quantity: 2, unitPriceAtSale: 5000 },
+      ]);
+      expect(totalAmount).toBe(10000);
+    });
+  });
+
   describe('Idempotency', () => {
     it('should return existing transaction on duplicate idempotency key', async () => {
       const existingTx = { _id: 'existing-id' };

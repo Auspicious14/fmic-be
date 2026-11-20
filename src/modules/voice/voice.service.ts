@@ -98,8 +98,19 @@ export class VoiceService {
           ));
         transcript = transcriptResult.text;
         detectedLanguage = transcriptResult.language as 'yo' | 'en' | 'pcm';
+        // Other models' readings of the same audio often hold what the best
+        // one missed (e.g. the Yoruba model got the numbers, another got the name).
+        const alternatives = scoredCandidates
+          .slice(1, 3)
+          .map((c) => c.text)
+          .filter((t) => t && t !== transcript);
+        const llmInput = alternatives.length
+          ? `${transcript}\n\nALTERNATIVE TRANSCRIPTS (same audio, other speech models):\n${alternatives
+              .map((t) => `- ${t}`)
+              .join('\n')}`
+          : transcript;
         extraction = await this.groqService.extractStructuredData(
-          transcript,
+          llmInput,
           shopContext,
         );
       };
@@ -206,6 +217,20 @@ export class VoiceService {
         this.logger.warn(
           `[VoiceService] No debtor extracted from transcript: "${transcript}"`,
         );
+        // If the sale itself was understood, say what we heard and ask only
+        // for the missing name, instead of a generic "talk am again".
+        const heardItems = (rawTx.data?.items || [])
+          .map((i: any) => `${i.quantity ?? ''} ${i.name ?? ''}`.trim())
+          .filter(Boolean)
+          .join(', ');
+        const heardAmount = this.toPositiveNumber(rawTx.data?.amount);
+        const heardSomething = heardItems || heardAmount;
+        const heardText = [
+          heardItems,
+          heardAmount ? `${heardAmount} naira` : '',
+        ]
+          .filter(Boolean)
+          .join(' for ');
         processedTransactions.push({
           intent: VoiceIntent.UNCLEAR,
           resolvedCustomer: {
@@ -217,8 +242,12 @@ export class VoiceService {
           total_amount: 0,
           transaction_type: 'unclear',
           confidence_score: 0,
-          reasoning_summary: 'Could not extract customer name from transcript',
-          voice_confirmation: 'I no understand well well. Abeg talk am again.',
+          reasoning_summary: heardSomething
+            ? `Heard a sale (${heardText}) but no customer name`
+            : 'Could not extract customer name from transcript',
+          voice_confirmation: heardSomething
+            ? `I hear ${heardText}, but I no catch the customer name. Abeg talk am again with the name.`
+            : 'I no understand well well. Abeg talk am again.',
         });
         continue; // skip to next transaction, don't crash
       }
@@ -251,6 +280,21 @@ export class VoiceService {
         itemsWithIds,
         transcript,
       );
+
+      // Trader gave only a total ("3 akara, 1000"): show the per-item price it
+      // implies, so the preview doesn't say ₦0.
+      type PricedItem = { quantity: number; unit_price: number };
+      const unpricedItems = (itemsWithIds as PricedItem[]).filter((i) => !(i.unit_price > 0));
+      if (transactionAmount > 0 && unpricedItems.length > 0) {
+        const pricedTotal = (itemsWithIds as PricedItem[])
+          .filter((i) => i.unit_price > 0)
+          .reduce((sum, i) => sum + i.quantity * i.unit_price, 0);
+        const unpricedUnits = unpricedItems.reduce((sum, i) => sum + i.quantity, 0);
+        const perUnit = Math.max(transactionAmount - pricedTotal, 0) / unpricedUnits;
+        for (const item of unpricedItems) {
+          item.unit_price = Math.round(perUnit * 100) / 100;
+        }
+      }
 
       // Generate Voice Confirmation
       let confirmationText = 'I have recorded the transaction.';
@@ -475,11 +519,29 @@ export class VoiceService {
       'carry',
       'take',
     ];
-    if (transactionMarkers.some((marker) => text.includes(marker))) score += 8;
+    // Whole words only: "ra" (bought) must not match inside "Ora" or "akara".
+    const wordSet = new Set(words);
+    const textWithSpaces = ` ${text} `;
+    if (
+      transactionMarkers.some((marker) =>
+        marker.includes(' ')
+          ? textWithSpaces.includes(` ${marker} `)
+          : wordSet.has(marker),
+      )
+    ) {
+      score += 8;
+    }
 
-    const moneyOrQuantityPattern =
-      /\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten|k|naira|ngn|kan|meji|meta|mẹta|marun)\b/;
-    if (moneyOrQuantityPattern.test(text)) score += 6;
+    // Real figures are the strongest sign a transcript is usable.
+    const digitGroups = text.match(/\d+/g) ?? [];
+    score += Math.min(digitGroups.length, 3) * 3;
+    if (digitGroups.some((d) => Number(d) >= 50)) score += 4; // looks like naira
+    const numberWords = [
+      'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
+      'ten', 'hundred', 'thousand', 'naira', 'ngn', 'kan', 'meji', 'meta',
+      'merin', 'marun', 'egberun', 'ogorun',
+    ];
+    if (words.some((w) => numberWords.includes(w))) score += 3;
 
     for (const customer of customers || []) {
       const names = [

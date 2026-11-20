@@ -460,4 +460,60 @@ describe('VoiceService', () => {
     expect(mockGeminiService.extractFromAudio).toHaveBeenCalled();
     expect(result.overall_transcript).toBe('Babatunde collect Indomie');
   });
+
+  it('picks the Yoruba reading with real numbers over Pidgin gibberish (log of 20 Nov)', async () => {
+    mockIntronService.isEnabled.mockReturnValue(true);
+    mockIntronService.transcribeCandidates.mockResolvedValueOnce([
+      { text: 'Ora meta ujekan', confidence: 0.85, language: 'pcm' },
+      { text: 'Ó ra àkàrà 3, ó jẹ́ 1000', confidence: 0.85, language: 'yo' },
+    ]);
+
+    const result = await service.processAudio(
+      { buffer: Buffer.from('a'), mimetype: 'audio/wav' },
+      'user-id',
+    );
+
+    expect(result.overall_transcript).toBe('Ó ra àkàrà 3, ó jẹ́ 1000');
+    expect(result.detectedLanguage).toBe('yo');
+    // The other reading is passed along so the AI can combine them.
+    const [llmInput] = mockGroqService.extractStructuredData.mock.calls[0];
+    expect(llmInput).toContain('ALTERNATIVE TRANSCRIPTS');
+    expect(llmInput).toContain('Ora meta ujekan');
+  });
+
+  it('asks only for the missing name when the sale itself was heard', async () => {
+    mockGroqService.extractStructuredData.mockResolvedValueOnce({
+      transactions: [
+        {
+          intent: VoiceIntent.CREDIT_SALE,
+          data: { debtor: '', amount: 1000, items: [{ name: 'akara', quantity: 3, price: 0 }] },
+          confidence_score: 0.5,
+          reasoning_summary: 'no name',
+        },
+      ],
+    });
+
+    const result = await service.processTranscript({ transcript: 'Ó ra àkàrà 3, ó jẹ́ 1000' }, 'user-id');
+
+    expect(result.transactions[0].intent).toBe(VoiceIntent.UNCLEAR);
+    expect(result.transactions[0].voice_confirmation).toBe(
+      'I hear 3 akara for 1000 naira, but I no catch the customer name. Abeg talk am again with the name.',
+    );
+  });
+
+  it('shows the per-item price implied by a spoken total in the preview', async () => {
+    mockGroqService.extractStructuredData.mockResolvedValueOnce({
+      transactions: [
+        {
+          intent: VoiceIntent.CREDIT_SALE,
+          data: { debtor: 'Babatunde', amount: 1000, items: [{ name: 'akara', quantity: 3, price: 0 }] },
+          confidence_score: 0.6,
+          reasoning_summary: 'Gani bought 3 akara for 1000',
+        },
+      ],
+    });
+    const result = await service.processTranscript({ transcript: 'x' }, 'user-id');
+    expect(result.transactions[0].total_amount).toBe(1000);
+    expect(result.transactions[0].items[0].unit_price).toBe(333.33);
+  });
 });

@@ -25,6 +25,7 @@ RULES:
 - If the speaker gives a total but no unit price, set "price" to 0 and put the total in "amount".
 - YORUBA: "X ra" / "X ó ra" / "X gbà" / "X mú" means X bought/took on credit, so the word(s) just before ra/gbà/mú are the buyer's name. "X san" means X paid. "ó jẹ́" / "máa jẹ́" introduces the total. Numbers may be in Yoruba (kan, méjì, mẹ́ta, mẹ́rin, márùn-ún) or digits.
 - TRANSCRIPTS ARE IMPERFECT: speech-to-text often splits or tone-marks a name into syllables (e.g. "gàá ní ò rá àkàrá" is "Gani ó ra akara" = Gani bought akara). Join the syllables into the most likely name, preferring a KNOWN CUSTOMER that sounds similar.
+- ALTERNATIVE TRANSCRIPTS, when given, are other speech-to-text readings of the SAME audio. Combine them: take the customer name, items and numbers from whichever reading has them. They are ONE voice note: never count the same sale twice.
 - If a sale or payment clearly happened but the buyer's name is uncertain, STILL return your best-guess name with a lower confidence_score (e.g. 0.4) instead of leaving "debtor" empty. The trader confirms or corrects it before anything is saved.
 
 JSON SCHEMA:

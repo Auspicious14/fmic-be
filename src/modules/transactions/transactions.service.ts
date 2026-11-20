@@ -59,15 +59,7 @@ export class TransactionsService {
       let transactionItems: TransactionItem[] = [];
 
       if (items && items.length > 0) {
-        totalAmount = items.reduce(
-          (sum, item) => sum + item.unitPriceAtSale * item.quantity,
-          0,
-        );
-        transactionItems = items.map((item) => ({
-          ...item,
-          productId: item.productId as string,
-          totalPrice: item.unitPriceAtSale * item.quantity,
-        }));
+        ({ totalAmount, transactionItems } = this.priceItems(items, amount));
       } else if (amount !== undefined) {
         totalAmount = amount;
       }
@@ -466,5 +458,73 @@ export class TransactionsService {
       flaggedTransactions: flagged,
       verifiedAt: new Date().toISOString(),
     };
+  }
+
+  /**
+   * Line totals and the transaction total.
+   *
+   * Traders often say only the total ("3 akara, it's 1000"), so items can
+   * arrive without a unit price. Then the stated amount is the truth: the
+   * part not covered by priced items is spread over the unpriced ones (the
+   * last line absorbs rounding), so the lines still add up to the amount.
+   */
+  private priceItems(
+    items: CreateTransactionDto['items'],
+    amount?: number,
+  ): { totalAmount: number; transactionItems: TransactionItem[] } {
+    const list = items ?? [];
+    const isPriced = (item: { unitPriceAtSale: number }) =>
+      Number(item.unitPriceAtSale) > 0;
+    const pricedTotal = list
+      .filter(isPriced)
+      .reduce((sum, item) => sum + item.unitPriceAtSale * item.quantity, 0);
+    const unpriced = list.filter((item) => !isPriced(item));
+    const stated = Number(amount) > 0 ? Number(amount) : 0;
+
+    const useStated =
+      stated > 0 &&
+      (unpriced.length > 0 || Math.abs(pricedTotal - stated) < 1);
+    const remaining = useStated ? Math.max(stated - pricedTotal, 0) : 0;
+    const unpricedUnits = unpriced.reduce(
+      (sum, item) => sum + (Number(item.quantity) || 1),
+      0,
+    );
+    const lastUnpriced = unpriced[unpriced.length - 1];
+    let allocated = 0;
+
+    const transactionItems: TransactionItem[] = list.map((item) => {
+      if (isPriced(item) || !unpricedUnits) {
+        return {
+          ...item,
+          productId: item.productId as string,
+          totalPrice: item.unitPriceAtSale * item.quantity,
+        };
+      }
+      const quantity = Number(item.quantity) || 1;
+      const totalPrice =
+        item === lastUnpriced
+          ? Math.round((remaining - allocated) * 100) / 100
+          : Math.round(((remaining * quantity) / unpricedUnits) * 100) / 100;
+      allocated += totalPrice;
+      return {
+        ...item,
+        productId: item.productId as string,
+        unitPriceAtSale: Math.round((totalPrice / quantity) * 100) / 100,
+        totalPrice,
+      };
+    });
+
+    // Prices derived from a total (e.g. 3 x 333.33) can miss it by a kobo;
+    // make the last line take the difference so lines add up exactly.
+    if (useStated && unpriced.length === 0 && transactionItems.length) {
+      const linesTotal = transactionItems.reduce((sum, i) => sum + i.totalPrice, 0);
+      const last = transactionItems[transactionItems.length - 1];
+      last.totalPrice = Math.round((last.totalPrice + stated - linesTotal) * 100) / 100;
+    }
+
+    const totalAmount = useStated
+      ? stated
+      : transactionItems.reduce((sum, item) => sum + item.totalPrice, 0);
+    return { totalAmount, transactionItems };
   }
 }
