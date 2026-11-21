@@ -94,6 +94,36 @@ export class LedgerQueryService {
     return { customers, total };
   }
 
+  /**
+   * Customers who took credit in a period and still owe something now
+   * ("who dey owe me this week"), with how much credit they took then.
+   */
+  async debtorsFrom(userId: string, range: PeriodRange) {
+    const { entries } = await this.entries(userId, TransactionType.CREDIT, range);
+    const takenBy = new Map<string, number>();
+    for (const entry of entries) {
+      const id = (entry.customer as { _id?: unknown } | null)?._id;
+      if (!id) continue;
+      takenBy.set(String(id), (takenBy.get(String(id)) ?? 0) + (entry.totalAmount || 0));
+    }
+    if (!takenBy.size) return { customers: [], total: 0 };
+    const customers = (
+      await this.customerModel
+        .find({
+          _id: { $in: [...takenBy.keys()] as any },
+          shopOwner: userId as any,
+          isDeleted: { $ne: true },
+          outstandingBalance: { $gt: 0 },
+        })
+        .sort({ outstandingBalance: -1 })
+        .select('name tag outstandingBalance')
+        .lean()
+        .exec()
+    ).map((c) => ({ ...c, takenInPeriod: takenBy.get(String(c._id)) ?? 0 }));
+    const total = customers.reduce((sum, c) => sum + (c.outstandingBalance || 0), 0);
+    return { customers, total };
+  }
+
   /** Sales on credit or payments in a period, newest first. */
   async entries(userId: string, type: TransactionType, range: PeriodRange) {
     const createdAt: Record<string, Date> = {};

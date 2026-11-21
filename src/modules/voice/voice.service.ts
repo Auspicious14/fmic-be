@@ -430,7 +430,10 @@ export class VoiceService {
     const periods = ['today', 'yesterday', 'week', 'month', 'all'];
     const name = String(rawTx.data?.debtor ?? '').trim();
     let topic = topics.includes(rawTx.data?.question) ? rawTx.data.question : 'summary';
-    if (name && topic === 'debtors') topic = 'customer_balance';
+    // A named customer means "how much does X owe", whatever topic was guessed;
+    // "how much does … owe" with no name means the debtors list.
+    if (name && (topic === 'debtors' || topic === 'summary')) topic = 'customer_balance';
+    if (!name && topic === 'customer_balance') topic = 'debtors';
     const resolvedCustomer = name
       ? await this.customerResolverService.resolve(name, rawTx.data?.descriptor, userId)
       : { name: '', isNew: false, isAmbiguous: false };

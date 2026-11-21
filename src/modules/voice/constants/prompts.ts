@@ -16,6 +16,7 @@ SUPPORTED INTENTS:
 6. QUESTION: The trader ASKS about their records instead of recording something: "who owe me?", "who never pay?", "how much Kamau owe?", "who pay today?", "wetin I sell for credit this week?", "ta ló jẹ mí lówó?". Nothing is recorded for a question.
    For QUESTION, "data" is: {"question": "debtors" | "customer_balance" | "payments" | "sales" | "summary", "debtor": the customer's name or null, "period": "today" | "yesterday" | "week" | "month" | "all" | null}
    - "debtors": who owes / how much people owe in total. "customer_balance": one named customer's balance or history. "payments": who paid / money collected. "sales": what was sold on credit. "summary": how business went.
+   - Examples: "how much Alfa dey owe me" -> {"question": "customer_balance", "debtor": "Alfa", "period": null}; "who dey owe me this week" -> {"question": "debtors", "debtor": null, "period": "week"}; "who don pay today" -> {"question": "payments", "debtor": null, "period": "today"}; "how market go this month" -> {"question": "summary", "debtor": null, "period": "month"}.
 7. PAYOUT_DETAILS: The trader gives THEIR OWN bank or wallet account for customers to pay into: "my account na OPay 8031234567, Abdulganiyu Uthman", "make dem pay to my GTB 0123456789". Nothing is recorded in the ledger.
    For PAYOUT_DETAILS, "data" is: {"bank": "string", "account_number": "digits as spoken or typed", "account_name": "string or null"}
 8. UNKNOWN: If confidence is low or intent is unclear.

@@ -482,11 +482,16 @@ export class WhatsappService {
       const history = await this.ledgerQueryService.customerHistory(userId, resolved.customerId);
       if (!history) return `I no find "${resolved.name}" for your book.`;
       const { customer, recent } = history;
-      const lines = recent.map((t) => {
+      // Skip ₦0 entries (left over from early testing) so the history reads cleanly.
+      const lines = recent.filter((t) => (t.totalAmount || 0) > 0).map((t) => {
         const items = (t.items ?? []).map((i) => `${i.quantity} × ${i.productName}`).join(', ');
-        return t.type === TransactionType.PAYMENT
-          ? `• ${shortDate(t.createdAt)}: paid ${naira(t.totalAmount)}`
-          : `• ${shortDate(t.createdAt)}: took ${items ? `${items}, ` : ''}${naira(t.totalAmount)}`;
+        if (t.type === TransactionType.PAYMENT) {
+          return `• ${shortDate(t.createdAt)}: paid ${naira(t.totalAmount)}`;
+        }
+        if (t.type === TransactionType.ADJUSTMENT) {
+          return `• ${shortDate(t.createdAt)}: adjusted ${naira(t.totalAmount)}`;
+        }
+        return `• ${shortDate(t.createdAt)}: took ${items ? `${items}, ` : ''}${naira(t.totalAmount)}`;
       });
       const balance = Number(customer.outstandingBalance) || 0;
       return [
@@ -495,6 +500,24 @@ export class WhatsappService {
           : `${who(customer)} doesn't owe you anything.`,
         lines.length ? `\nLast entries:\n${lines.join('\n')}` : '',
       ].join('');
+    }
+
+    if (topic === 'debtors' && period && period !== 'all') {
+      // "Who dey owe me this week": people who took credit then and still owe.
+      const range = periodRange(period);
+      const { customers, total } = await this.ledgerQueryService.debtorsFrom(userId, range);
+      const everyone = await this.ledgerQueryService.debtors(userId);
+      const allLine = `\n\nEveryone together owes you ${naira(everyone.total)}. Send "who owe me" for the full list.`;
+      if (!customers.length) {
+        return `Nobody who took credit ${range.label} still owes you.${everyone.total > 0 ? allLine : ''}`;
+      }
+      const lines = customers
+        .slice(0, LIST_LIMIT)
+        .map(
+          (c, i) =>
+            `${i + 1}. ${who(c)}: owes ${naira(c.outstandingBalance)} (took ${naira(c.takenInPeriod)} ${range.label})`,
+        );
+      return `📒 ${customers.length} ${customers.length === 1 ? 'customer' : 'customers'} who took credit ${range.label} still owe you ${naira(total)}:\n${lines.join('\n')}${more(customers.length)}${allLine}`;
     }
 
     if (topic === 'debtors') {

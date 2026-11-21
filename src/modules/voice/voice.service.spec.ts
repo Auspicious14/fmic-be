@@ -631,6 +631,21 @@ describe('VoiceService', () => {
       expect(tx.total_amount).toBe(0);
     });
 
+    it('"how much Alfa dey owe me" is about Alfa even if the model says summary (21 Nov test)', async () => {
+      mockGroqService.extractStructuredData.mockResolvedValueOnce({
+        transactions: [{ intent: VoiceIntent.QUESTION, data: { question: 'summary', debtor: 'Alfa', period: 'today' } }],
+      });
+      mockCustomerResolverService.resolve.mockResolvedValueOnce({
+        customerId: 'c9',
+        name: 'Alfa',
+        isNew: false,
+        isAmbiguous: false,
+      });
+      const tx = (await service.processTranscript({ transcript: 'how much Alfa dey owe me' }, 'user-id'))
+        .transactions[0];
+      expect(tx.question?.topic).toBe('customer_balance');
+    });
+
     it('"who pay this week?" keeps the period; unknown topics fall back to a summary', async () => {
       mockGroqService.extractStructuredData.mockResolvedValueOnce({
         transactions: [

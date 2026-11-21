@@ -16,6 +16,7 @@ describe('WhatsappService', () => {
   const receiptImageService = { render: jest.fn() };
   const ledgerQueryService = {
     debtors: jest.fn(),
+    debtorsFrom: jest.fn(),
     entries: jest.fn(),
     customerHistory: jest.fn(),
   };
@@ -450,6 +451,37 @@ describe('WhatsappService', () => {
       );
       expect(api.sendButtons).not.toHaveBeenCalled();
       expect(pending).toBeNull();
+    });
+
+    it('"who dey owe me this week" lists only people who took credit this week (21 Nov test)', async () => {
+      ask({ topic: 'debtors', period: 'week' });
+      ledgerQueryService.debtorsFrom.mockResolvedValue({
+        customers: [{ name: 'Alfa', outstandingBalance: 3000, takenInPeriod: 3000 }],
+        total: 3000,
+      });
+      ledgerQueryService.debtors.mockResolvedValue({ customers: [], total: 805000 });
+
+      await send('who dey owe me this week');
+
+      const answer = api.sendText.mock.calls[0][1];
+      expect(answer).toContain('1 customer who took credit in the last 7 days still owe you ₦3,000');
+      expect(answer).toContain('1. Alfa: owes ₦3,000 (took ₦3,000 in the last 7 days)');
+      expect(answer).toContain('Everyone together owes you ₦805,000');
+    });
+
+    it('hides ₦0 entries from a customer history', async () => {
+      ask({ topic: 'customer_balance' }, { customerId: 'c1', name: 'Kamau', isNew: false, isAmbiguous: false });
+      ledgerQueryService.customerHistory.mockResolvedValue({
+        customer: { name: 'Kamau', tag: 'Bro', outstandingBalance: 35000 },
+        recent: [
+          { type: TransactionType.PAYMENT, totalAmount: 5000, createdAt: new Date('2026-11-20T10:00:00Z') },
+          { type: TransactionType.PAYMENT, totalAmount: 0, createdAt: new Date('2026-03-08T10:00:00Z') },
+        ],
+      });
+      await send('how much kamau dey owe me');
+      const answer = api.sendText.mock.calls[0][1];
+      expect(answer).toContain('Kamau (Bro) owes you ₦35,000.');
+      expect(answer).not.toContain('paid ₦0');
     });
 
     it('says so when nobody owes anything', async () => {
