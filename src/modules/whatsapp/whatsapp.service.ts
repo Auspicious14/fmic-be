@@ -7,8 +7,15 @@ import { VoiceService } from '../voice/voice.service';
 import { VoiceIntent } from '../voice/dto/voice-output.dto';
 import { CustomersService } from '../customers/customers.service';
 import { TransactionsService } from '../transactions/transactions.service';
-import { ReceiptService } from '../transactions/receipt.service';
+import { ReceiptData, ReceiptService } from '../transactions/receipt.service';
+import { ReceiptImageService } from '../transactions/receipt-image.service';
+import {
+  LedgerPeriod,
+  LedgerQueryService,
+  periodRange,
+} from '../transactions/ledger-query.service';
 import { TransactionType } from '../transactions/schemas/transaction.schema';
+import { LAGOS_TIME_ZONE } from '../../common/utils/lagos-time';
 import { buildPublicReceiptUrl } from '../../common/utils/signed-link';
 import { WhatsappApiService } from './whatsapp-api.service';
 import {
@@ -26,6 +33,12 @@ const RECORDABLE = [VoiceIntent.CREDIT_SALE, VoiceIntent.PAYMENT];
 
 const naira = (amount: number) =>
   `₦${Math.round(Number(amount) || 0).toLocaleString('en-NG')}`;
+const shortDate = (date: Date) =>
+  new Date(date).toLocaleDateString('en-NG', { day: 'numeric', month: 'short', timeZone: LAGOS_TIME_ZONE });
+const shortTime = (date: Date) =>
+  new Date(date).toLocaleTimeString('en-NG', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: LAGOS_TIME_ZONE });
+/** Most lines a list answer shows before "…and N more". */
+const LIST_LIMIT = 15;
 
 /**
  * The Ledga WhatsApp bot. A trader voice-notes (or types) a sale, gets a
@@ -48,6 +61,8 @@ export class WhatsappService {
     private readonly pendingModel: Model<WhatsappPendingDocument>,
     @InjectModel(WhatsappSeen.name)
     private readonly seenModel: Model<WhatsappSeenDocument>,
+    private readonly receiptImageService: ReceiptImageService,
+    private readonly ledgerQueryService: LedgerQueryService,
   ) {}
 
   /** Entry point for the Meta webhook body. */
@@ -215,13 +230,23 @@ export class WhatsappService {
     result: any,
     options: { intro?: string; note?: string } = {},
   ): Promise<void> {
-    const transactions: any[] = result?.transactions ?? [];
+    let transactions: any[] = result?.transactions ?? [];
 
     if (
       transactions.length > 0 &&
       transactions.every((t) => t.intent === VoiceIntent.DAILY_SUMMARY)
     ) {
       return this.sendDailySummary(from, userId);
+    }
+
+    // Questions ("who owe me?") are answered straight away; nothing is saved.
+    const questions = transactions.filter((t) => t.intent === VoiceIntent.QUESTION);
+    if (questions.length) {
+      for (const question of questions) {
+        await this.api.sendText(from, await this.answerQuestion(userId, question));
+      }
+      transactions = transactions.filter((t) => t.intent !== VoiceIntent.QUESTION);
+      if (!transactions.length) return;
     }
 
     // No ₦0 debts: a sale heard without any price is sent back, not saved.
@@ -344,20 +369,18 @@ export class WhatsappService {
 
       const customer = await this.customersService.findOne(customerId, userId);
       const receipt = this.receiptService.buildReceiptData(saved, customer, user);
+
+      // The receipt as a picture the trader forwards; its caption (which
+      // WhatsApp forwards too) tells the customer how to pay.
+      const sentImage = await this.sendReceiptImage(from, receipt);
       const receiptUrl = buildPublicReceiptUrl(saved._id.toString());
-      const shareUrl = customer.phone
-        ? this.receiptService.buildWhatsAppUrl(
-            customer.phone,
-            this.receiptService.generateWhatsAppMessage(receipt),
-          )
-        : null;
 
       replies.push(
         [
           `✅ ${this.describe(tx)}`,
           `${customer.name} now owes ${naira(customer.outstandingBalance)}.`,
-          shareUrl
-            ? `Send ${customer.name} the receipt: ${shareUrl}`
+          sentImage
+            ? `Forward the receipt to ${customer.name}: hold it and tap Forward.`
             : receiptUrl
               ? `Forward this receipt to ${customer.name}: ${receiptUrl}`
               : '',
@@ -376,6 +399,107 @@ export class WhatsappService {
   private async cancel(from: string): Promise<void> {
     await this.pendingModel.deleteOne({ phone: from }).exec();
     await this.api.sendText(from, '❌ Cancelled. Nothing was saved.');
+  }
+
+  /** Sends the receipt PNG. False if it couldn't be drawn or sent. */
+  private async sendReceiptImage(to: string, receipt: ReceiptData): Promise<boolean> {
+    const png = await this.receiptImageService.render(receipt);
+    if (!png) return false;
+    const balance = Number(receipt.outstandingBalance) || 0;
+    const shop = receipt.businessName;
+    const caption =
+      receipt.transactionType === 'payment'
+        ? `Receipt from ${shop}: payment of ${naira(receipt.totalAmount)} received. ${
+            balance > 0 ? `You still owe ${naira(balance)}.` : 'Thank you!'
+          }`
+        : `Receipt from ${shop}. You owe ${naira(balance)} in total.`;
+    const payLine = balance > 0 && receipt.payUrl ? `\nPay online: ${receipt.payUrl}` : '';
+    try {
+      await this.api.sendImage(to, png, `${caption}${payLine}`);
+      return true;
+    } catch (error) {
+      this.logger.warn(`[WhatsApp] receipt image not sent: ${(error as Error).message}`);
+      return false;
+    }
+  }
+
+  /** Answers "who owe me?", "how much Kamau owe?", "who pay this week?". */
+  async answerQuestion(userId: string, question: any): Promise<string> {
+    const topic: string = question.question?.topic ?? 'summary';
+    const period = question.question?.period as LedgerPeriod | undefined;
+    const more = (n: number) => (n > LIST_LIMIT ? `\n…and ${n - LIST_LIMIT} more` : '');
+    const who = (c: { name?: string; tag?: string } | null | undefined) =>
+      c ? `${c.name}${c.tag ? ` (${c.tag})` : ''}` : 'Deleted customer';
+
+    if (topic === 'customer_balance') {
+      const resolved = question.resolvedCustomer ?? {};
+      if (resolved.isAmbiguous) {
+        return `I get more than one "${resolved.name}". Add their tag, e.g. "${resolved.name} mechanic".`;
+      }
+      if (!resolved.customerId) {
+        return `I no find "${resolved.name || 'that customer'}" for your book.`;
+      }
+      const history = await this.ledgerQueryService.customerHistory(userId, resolved.customerId);
+      if (!history) return `I no find "${resolved.name}" for your book.`;
+      const { customer, recent } = history;
+      const lines = recent.map((t) => {
+        const items = (t.items ?? []).map((i) => `${i.quantity} × ${i.productName}`).join(', ');
+        return t.type === TransactionType.PAYMENT
+          ? `• ${shortDate(t.createdAt)}: paid ${naira(t.totalAmount)}`
+          : `• ${shortDate(t.createdAt)}: took ${items ? `${items}, ` : ''}${naira(t.totalAmount)}`;
+      });
+      const balance = Number(customer.outstandingBalance) || 0;
+      return [
+        balance > 0
+          ? `${who(customer)} owes you ${naira(balance)}.`
+          : `${who(customer)} doesn't owe you anything.`,
+        lines.length ? `\nLast entries:\n${lines.join('\n')}` : '',
+      ].join('');
+    }
+
+    if (topic === 'debtors') {
+      const { customers, total } = await this.ledgerQueryService.debtors(userId);
+      if (!customers.length) return 'Nobody owes you anything right now. 🎉';
+      const lines = customers
+        .slice(0, LIST_LIMIT)
+        .map((c, i) => `${i + 1}. ${who(c)}: ${naira(c.outstandingBalance)}`);
+      return `📒 ${customers.length} ${customers.length === 1 ? 'customer owes' : 'customers owe'} you ${naira(total)}:\n${lines.join('\n')}${more(customers.length)}`;
+    }
+
+    if (topic === 'payments' || topic === 'sales') {
+      const range = periodRange(period ?? 'today');
+      const type = topic === 'payments' ? TransactionType.PAYMENT : TransactionType.CREDIT;
+      const { entries, total } = await this.ledgerQueryService.entries(userId, type, range);
+      if (!entries.length) {
+        return topic === 'payments'
+          ? `Nobody paid ${range.label}.`
+          : `No credit sales ${range.label}.`;
+      }
+      const when = (d: Date) => (period === 'today' || !period ? shortTime(d) : shortDate(d));
+      const lines = entries.slice(0, LIST_LIMIT).map((e) => {
+        const items = (e.items ?? []).map((i) => `${i.quantity} × ${i.productName}`).join(', ');
+        return `• ${who(e.customer)}: ${naira(e.totalAmount)}${items && topic === 'sales' ? ` (${items})` : ''}, ${when(e.createdAt)}`;
+      });
+      const title =
+        topic === 'payments'
+          ? `💰 You collected ${naira(total)} ${range.label}:`
+          : `🧾 You gave ${naira(total)} on credit ${range.label}:`;
+      return `${title}\n${lines.join('\n')}${more(entries.length)}`;
+    }
+
+    // summary
+    const range = periodRange(period ?? 'today');
+    const [sales, payments, debtors] = await Promise.all([
+      this.ledgerQueryService.entries(userId, TransactionType.CREDIT, range),
+      this.ledgerQueryService.entries(userId, TransactionType.PAYMENT, range),
+      this.ledgerQueryService.debtors(userId),
+    ]);
+    return [
+      `📊 Your shop ${range.label}:`,
+      `• Credit given: ${naira(sales.total)} (${sales.entries.length})`,
+      `• Money collected: ${naira(payments.total)} (${payments.entries.length})`,
+      `• Customers owe you ${naira(debtors.total)} in total`,
+    ].join('\n');
   }
 
   private async sendDailySummary(from: string, userId: string): Promise<void> {
@@ -408,6 +532,8 @@ export class WhatsappService {
       '• "Gani ó ra akara mẹ́ta, ₦900"',
       '• "Kamau don pay 5,000"',
       '• "How today go?" for your daily summary',
+      '• "Who owe me?" or "How much Kamau owe?"',
+      '• "Who pay this week?"',
       '',
       "I'll show you what I heard, and you tap ✅ to save it.",
     ].join('\n');

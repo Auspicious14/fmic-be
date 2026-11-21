@@ -7,6 +7,8 @@ export enum VoiceIntent {
   ADJUSTMENT = 'ADJUSTMENT',
   PRODUCT_PRICE_UPDATE = 'PRODUCT_PRICE_UPDATE',
   DAILY_SUMMARY = 'DAILY_SUMMARY',
+  /** The trader asks about their records: "who owe me?" */
+  QUESTION = 'QUESTION',
   UNKNOWN = 'UNKNOWN',
   UNCLEAR = 'UNCLEAR',
 }
@@ -72,6 +74,12 @@ export class VoiceTransactionData {
 
   @ApiProperty({ required: false })
   voice_confirmation?: string;
+
+  @ApiProperty({
+    required: false,
+    description: 'For QUESTION: what is asked (debtors, customer_balance, payments, sales, summary) and for which period',
+  })
+  question?: { topic: string; period?: string };
 
   @ApiProperty({ required: false, description: 'What the customer owed before this entry (known customers only)' })
   current_balance?: number;

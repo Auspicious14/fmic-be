@@ -10,7 +10,14 @@ describe('WhatsappService', () => {
   const api = {
     sendText: jest.fn(),
     sendButtons: jest.fn(),
+    sendImage: jest.fn(),
     downloadMedia: jest.fn(),
+  };
+  const receiptImageService = { render: jest.fn() };
+  const ledgerQueryService = {
+    debtors: jest.fn(),
+    entries: jest.fn(),
+    customerHistory: jest.fn(),
   };
   const voiceService = {
     processAudio: jest.fn(),
@@ -69,6 +76,8 @@ describe('WhatsappService', () => {
     userModel as any,
     pendingModel as any,
     seenModel as any,
+    receiptImageService as any,
+    ledgerQueryService as any,
   );
 
   const creditSale = {
@@ -89,6 +98,7 @@ describe('WhatsappService', () => {
     jest.clearAllMocks();
     linkedUser = user;
     pending = null;
+    receiptImageService.render.mockResolvedValue(null);
     process.env.BACKEND_API_URL = 'https://api.example.com';
   });
 
@@ -152,6 +162,56 @@ describe('WhatsappService', () => {
     const reply = api.sendText.mock.calls.at(-1)[1];
     expect(reply).toContain('Gani now owes ₦900');
     expect(reply).toContain('https://api.example.com/api/r/tx-1?s=');
+  });
+
+  it('on ✅ sends the receipt as a picture with the pay link in the caption', async () => {
+    pending = { phone, userId: 'user-1', sourceMessageId: 'm3', interpretation: creditSale };
+    customersService.create.mockResolvedValue({ _id: { toString: () => 'cust-1' } });
+    transactionsService.create.mockResolvedValue({ _id: { toString: () => 'tx-1' } });
+    customersService.findOne.mockResolvedValue({ name: 'Gani', phone: '', outstandingBalance: 900 });
+    receiptService.buildReceiptData.mockReturnValueOnce({
+      businessName: 'Mama Shop',
+      transactionType: 'credit',
+      totalAmount: 900,
+      outstandingBalance: 900,
+      payUrl: 'https://api.example.com/api/pay/cust-1?s=sig',
+    } as any);
+    receiptImageService.render.mockResolvedValue(Buffer.from('png'));
+
+    await service.handleMessage({
+      id: 'm4b',
+      from: phone,
+      type: 'interactive',
+      interactive: { button_reply: { id: 'ledga_confirm' } },
+    });
+
+    const [to, png, caption] = api.sendImage.mock.calls[0];
+    expect(to).toBe(phone);
+    expect(png).toEqual(Buffer.from('png'));
+    expect(caption).toBe(
+      'Receipt from Mama Shop. You owe ₦900 in total.\nPay online: https://api.example.com/api/pay/cust-1?s=sig',
+    );
+    const reply = api.sendText.mock.calls.at(-1)[1];
+    expect(reply).toContain('Forward the receipt to Gani');
+    expect(reply).not.toContain('/api/r/');
+  });
+
+  it('falls back to the receipt link if the picture cannot be sent', async () => {
+    pending = { phone, userId: 'user-1', sourceMessageId: 'm3c', interpretation: creditSale };
+    customersService.create.mockResolvedValue({ _id: { toString: () => 'cust-1' } });
+    transactionsService.create.mockResolvedValue({ _id: { toString: () => 'tx-9' } });
+    customersService.findOne.mockResolvedValue({ name: 'Gani', phone: '', outstandingBalance: 900 });
+    receiptImageService.render.mockResolvedValue(Buffer.from('png'));
+    api.sendImage.mockRejectedValueOnce(new Error('upload failed'));
+
+    await service.handleMessage({
+      id: 'm4c',
+      from: phone,
+      type: 'interactive',
+      interactive: { button_reply: { id: 'ledga_confirm' } },
+    });
+
+    expect(api.sendText.mock.calls.at(-1)[1]).toContain('https://api.example.com/api/r/tx-9?s=');
   });
 
   it('accepts a typed "yes" as confirmation', async () => {
@@ -356,6 +416,112 @@ describe('WhatsappService', () => {
       expect(transactionsService.create).not.toHaveBeenCalled();
       expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('Nothing is ready to save yet'));
       expect(pending).not.toBeNull();
+    });
+  });
+
+  describe('questions', () => {
+    const ask = (question: any, resolvedCustomer: any = { name: '', isNew: false, isAmbiguous: false }) =>
+      voiceService.processTranscript.mockResolvedValue({
+        transactions: [{ intent: VoiceIntent.QUESTION, resolvedCustomer, question }],
+        overall_transcript: 'question',
+      });
+    let questionId = 0;
+    const send = (body: string) =>
+      service.handleMessage({ id: `q-${++questionId}`, from: phone, type: 'text', text: { body } });
+
+    it('"who owe me?" lists debtors, biggest first, and saves nothing', async () => {
+      ask({ topic: 'debtors' });
+      ledgerQueryService.debtors.mockResolvedValue({
+        customers: [
+          { name: 'Kamau', outstandingBalance: 5000 },
+          { name: 'Tunde', tag: 'mechanic', outstandingBalance: 1400 },
+        ],
+        total: 6400,
+      });
+
+      await send('who owe me?');
+
+      expect(api.sendText).toHaveBeenCalledWith(
+        phone,
+        '📒 2 customers owe you ₦6,400:\n1. Kamau: ₦5,000\n2. Tunde (mechanic): ₦1,400',
+      );
+      expect(api.sendButtons).not.toHaveBeenCalled();
+      expect(pending).toBeNull();
+    });
+
+    it('says so when nobody owes anything', async () => {
+      ask({ topic: 'debtors' });
+      ledgerQueryService.debtors.mockResolvedValue({ customers: [], total: 0 });
+      await send('who owe me');
+      expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('Nobody owes you'));
+    });
+
+    it('"how much Kamau owe?" gives the balance and the last entries', async () => {
+      ask({ topic: 'customer_balance' }, { customerId: 'c1', name: 'Kamau', isNew: false, isAmbiguous: false });
+      ledgerQueryService.customerHistory.mockResolvedValue({
+        customer: { name: 'Kamau', outstandingBalance: 3000 },
+        recent: [
+          { type: TransactionType.PAYMENT, totalAmount: 2000, createdAt: new Date('2026-11-20T10:00:00Z') },
+          {
+            type: TransactionType.CREDIT,
+            totalAmount: 5000,
+            items: [{ productName: 'Rice', quantity: 2 }],
+            createdAt: new Date('2026-11-18T10:00:00Z'),
+          },
+        ],
+      });
+
+      await send('how much Kamau owe');
+
+      const answer = api.sendText.mock.calls[0][1];
+      expect(answer).toContain('Kamau owes you ₦3,000.');
+      expect(answer).toContain('• 20 Nov: paid ₦2,000');
+      expect(answer).toContain('• 18 Nov: took 2 × Rice, ₦5,000');
+    });
+
+    it('does not guess when the customer is not in the book', async () => {
+      ask({ topic: 'customer_balance' }, { name: 'Zainab', isNew: true, isAmbiguous: false });
+      await send('how much Zainab owe');
+      expect(api.sendText).toHaveBeenCalledWith(phone, 'I no find "Zainab" for your book.');
+      expect(ledgerQueryService.customerHistory).not.toHaveBeenCalled();
+    });
+
+    it('"who pay today?" lists payments with the total', async () => {
+      ask({ topic: 'payments', period: 'today' });
+      ledgerQueryService.entries.mockResolvedValue({
+        entries: [
+          { type: TransactionType.PAYMENT, totalAmount: 1400, customer: { name: 'Alfa' }, createdAt: new Date('2026-11-21T12:41:00Z') },
+        ],
+        total: 1400,
+      });
+
+      await send('who pay today');
+
+      expect(ledgerQueryService.entries).toHaveBeenCalledWith(
+        'user-1',
+        TransactionType.PAYMENT,
+        expect.objectContaining({ label: 'today' }),
+      );
+      const answer = api.sendText.mock.calls[0][1];
+      expect(answer).toContain('💰 You collected ₦1,400 today:');
+      expect(answer).toMatch(/• Alfa: ₦1,400, 1:41\s?pm/i);
+    });
+
+    it('answers a question asked while an entry is waiting, and keeps the entry', async () => {
+      pending = {
+        phone,
+        userId: 'user-1',
+        sourceMessageId: 'v9',
+        interpretation: { overall_transcript: 'Alfa buy rice 1400', transactions: [{ intent: VoiceIntent.CREDIT_SALE }] },
+      };
+      voiceService.reviseTranscript.mockResolvedValue({ action: 'new' });
+      ask({ topic: 'debtors' });
+      ledgerQueryService.debtors.mockResolvedValue({ customers: [], total: 0 });
+
+      await send('who owe me');
+
+      expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('Nobody owes you'));
+      expect(pending.sourceMessageId).toBe('v9');
     });
   });
 });

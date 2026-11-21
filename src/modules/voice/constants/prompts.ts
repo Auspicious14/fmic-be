@@ -13,7 +13,10 @@ SUPPORTED INTENTS:
 3. ADJUSTMENT: Correction of previous entries.
 4. PRODUCT_PRICE_UPDATE: Updating a product's price.
 5. DAILY_SUMMARY: Request for today's transaction totals and summary.
-6. UNKNOWN: If confidence is low or intent is unclear.
+6. QUESTION: The trader ASKS about their records instead of recording something: "who owe me?", "who never pay?", "how much Kamau owe?", "who pay today?", "wetin I sell for credit this week?", "ta ló jẹ mí lówó?". Nothing is recorded for a question.
+   For QUESTION, "data" is: {"question": "debtors" | "customer_balance" | "payments" | "sales" | "summary", "debtor": the customer's name or null, "period": "today" | "yesterday" | "week" | "month" | "all" | null}
+   - "debtors": who owes / how much people owe in total. "customer_balance": one named customer's balance or history. "payments": who paid / money collected. "sales": what was sold on credit. "summary": how business went.
+7. UNKNOWN: If confidence is low or intent is unclear.
 
 RULES:
 - Return ONLY valid JSON.
@@ -33,7 +36,7 @@ JSON SCHEMA:
 {
   "transactions": [
     {
-      "intent": "CREDIT_SALE | PAYMENT | ADJUSTMENT | PRODUCT_PRICE_UPDATE | UNKNOWN",
+      "intent": "CREDIT_SALE | PAYMENT | ADJUSTMENT | PRODUCT_PRICE_UPDATE | DAILY_SUMMARY | QUESTION | UNKNOWN",
       "data": {
         "debtor": "string",
         "descriptor": "string (optional, e.g., 'mechanic', 'from church')",
@@ -126,7 +129,7 @@ Decide what REPLY is:
 - "correct": it fixes something in HEARD (customer name, item, quantity, price, or that it was a payment, not a sale).
   Rewrite HEARD as ONE corrected sentence: apply every fix in REPLY and keep everything REPLY did not change.
   When REPLY clearly means a customer or product from the shop list, use the shop's spelling.
-- "new": it is a different sale or payment, not a fix of HEARD.
+- "new": it is a different sale or payment, or a question about their records ("who owe me?"), not a fix of HEARD.
 - "unclear": you cannot tell what to change. Ask ONE short question in simple Pidgin.
 
 Rules:

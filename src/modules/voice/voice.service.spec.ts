@@ -603,4 +603,47 @@ describe('VoiceService', () => {
       expect(paid.warnings).toEqual([]);
     });
   });
+
+  describe('questions about the records', () => {
+    it('"how much Kamau owe?" becomes a QUESTION with the resolved customer, nothing to save', async () => {
+      mockGroqService.extractStructuredData.mockResolvedValueOnce({
+        transactions: [
+          {
+            intent: VoiceIntent.QUESTION,
+            data: { question: 'customer_balance', debtor: 'Kamau', period: null },
+            confidence_score: 0.9,
+          },
+        ],
+      });
+      mockCustomerResolverService.resolve.mockResolvedValueOnce({
+        customerId: 'c1',
+        name: 'Kamau',
+        isNew: false,
+        isAmbiguous: false,
+      });
+
+      const tx = (await service.processTranscript({ transcript: 'how much Kamau owe?' }, 'user-id'))
+        .transactions[0];
+
+      expect(tx.intent).toBe(VoiceIntent.QUESTION);
+      expect(tx.question).toEqual({ topic: 'customer_balance', period: undefined });
+      expect(tx.resolvedCustomer.customerId).toBe('c1');
+      expect(tx.total_amount).toBe(0);
+    });
+
+    it('"who pay this week?" keeps the period; unknown topics fall back to a summary', async () => {
+      mockGroqService.extractStructuredData.mockResolvedValueOnce({
+        transactions: [
+          { intent: VoiceIntent.QUESTION, data: { question: 'payments', period: 'week' } },
+          { intent: VoiceIntent.QUESTION, data: { question: 'weather', period: 'someday' } },
+        ],
+      });
+
+      const [payments, other] = (await service.processTranscript({ transcript: 'x' }, 'user-id'))
+        .transactions;
+
+      expect(payments.question).toEqual({ topic: 'payments', period: 'week' });
+      expect(other.question).toEqual({ topic: 'summary', period: undefined });
+    });
+  });
 });

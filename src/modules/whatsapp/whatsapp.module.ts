@@ -27,5 +27,6 @@ import {
   ],
   controllers: [WhatsappController],
   providers: [WhatsappService, WhatsappApiService],
+  exports: [WhatsappApiService],
 })
 export class WhatsappModule {}

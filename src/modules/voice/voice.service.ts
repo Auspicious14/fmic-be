@@ -261,6 +261,10 @@ export class VoiceService {
     const runningBalance = new Map<string, number>();
 
     for (const rawTx of rawTransactions) {
+      if (rawTx.intent === VoiceIntent.QUESTION) {
+        processedTransactions.push(await this.buildQuestion(rawTx, userId));
+        continue;
+      }
       if (!rawTx.data?.debtor && rawTx.intent !== VoiceIntent.DAILY_SUMMARY) {
         this.logger.warn(
           `[VoiceService] No debtor extracted from transcript: "${transcript}"`,
@@ -395,6 +399,35 @@ export class VoiceService {
     return {
       transactions: processedTransactions,
       overall_transcript: transcript,
+    };
+  }
+
+  /** A question about the records ("how much Kamau owe?"): nothing to save. */
+  private async buildQuestion(
+    rawTx: any,
+    userId: string,
+  ): Promise<VoiceTransactionData> {
+    const topics = ['debtors', 'customer_balance', 'payments', 'sales', 'summary'];
+    const periods = ['today', 'yesterday', 'week', 'month', 'all'];
+    const name = String(rawTx.data?.debtor ?? '').trim();
+    let topic = topics.includes(rawTx.data?.question) ? rawTx.data.question : 'summary';
+    if (name && topic === 'debtors') topic = 'customer_balance';
+    const resolvedCustomer = name
+      ? await this.customerResolverService.resolve(name, rawTx.data?.descriptor, userId)
+      : { name: '', isNew: false, isAmbiguous: false };
+    return {
+      intent: VoiceIntent.QUESTION,
+      resolvedCustomer,
+      items: [],
+      total_amount: 0,
+      transaction_type: 'question',
+      confidence_score: rawTx.confidence_score ?? 0,
+      reasoning_summary: rawTx.reasoning_summary ?? '',
+      question: {
+        topic,
+        period: periods.includes(rawTx.data?.period) ? rawTx.data.period : undefined,
+      },
+      warnings: [],
     };
   }
 

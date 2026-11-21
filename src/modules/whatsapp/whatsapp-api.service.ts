@@ -55,6 +55,54 @@ export class WhatsappApiService {
     });
   }
 
+  /** Uploads an image (e.g. a receipt PNG) and sends it with a caption. */
+  async sendImage(to: string, png: Buffer, caption: string): Promise<void> {
+    const phoneNumberId = this.configService.get<string>('WHATSAPP_PHONE_NUMBER_ID');
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', 'image/png');
+    form.append('file', new Blob([new Uint8Array(png)], { type: 'image/png' }), 'receipt.png');
+    const upload = await fetch(`${this.baseUrl}/${phoneNumberId}/media`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${this.token}` },
+      body: form,
+      signal: AbortSignal.timeout(20000),
+    });
+    const media: any = await upload.json().catch(() => ({}));
+    if (!upload.ok || !media?.id) {
+      throw new Error(`WhatsApp media upload failed (${upload.status})`);
+    }
+    await this.send(to, {
+      type: 'image',
+      image: { id: media.id, caption: caption.slice(0, 1024) },
+    });
+  }
+
+  /**
+   * Approved template message. Needed to message a trader who hasn't written
+   * to the bot in the last 24 hours (WhatsApp's rule for business-started chats).
+   */
+  async sendTemplate(
+    to: string,
+    name: string,
+    params: string[],
+    language = 'en',
+  ): Promise<void> {
+    await this.send(to, {
+      type: 'template',
+      template: {
+        name,
+        language: { code: language },
+        components: [
+          {
+            type: 'body',
+            parameters: params.map((text) => ({ type: 'text', text })),
+          },
+        ],
+      },
+    });
+  }
+
   /** Downloads an incoming voice note / audio file. */
   async downloadMedia(mediaId: string): Promise<{ buffer: Buffer; mimetype: string }> {
     const meta = await fetch(`${this.baseUrl}/${encodeURIComponent(mediaId)}`, {

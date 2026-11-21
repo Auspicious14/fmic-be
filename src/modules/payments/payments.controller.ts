@@ -32,8 +32,15 @@ export class PaymentsController {
 
   /** Flutterwave sends the customer back here after checkout. */
   @Get('pay/done')
-  payDone(@Query('status') status: string, @Res() res: Response) {
+  async payDone(
+    @Query('status') status: string,
+    @Query('transaction_id') transactionId: string,
+    @Res() res: Response,
+  ) {
     const ok = status === 'successful' || status === 'completed';
+    // The query string is only a hint: the payment is checked with
+    // Flutterwave before anything is recorded.
+    if (ok) await this.paymentsService.recordFromRedirect(transactionId);
     return this.sendPage(
       res,
       ok ? 'Payment received' : 'Payment not completed',

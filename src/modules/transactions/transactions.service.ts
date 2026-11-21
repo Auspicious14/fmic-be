@@ -38,6 +38,11 @@ export class TransactionsService {
     private receiptService: ReceiptService,
   ) {}
 
+  /** True if an entry with this idempotency key was already saved. */
+  async existsByIdempotencyKey(idempotencyKey: string): Promise<boolean> {
+    return Boolean(await this.transactionModel.exists({ idempotencyKey }));
+  }
+
   async create(
     createTransactionDto: CreateTransactionDto,
     userId: string,

@@ -8,7 +8,21 @@ describe('PaymentsService', () => {
   const customerId = '507f1f77bcf86cd799439011';
   const ownerId = '507f1f77bcf86cd799439022';
   const fetchMock = jest.fn();
-  const transactionsService = { create: jest.fn() };
+  const transactionsService = {
+    create: jest.fn(async () => ({ _id: 'tx-1', type: 'payment', totalAmount: 15000 })),
+    existsByIdempotencyKey: jest.fn(async () => false),
+  };
+  const whatsappApi = {
+    isEnabled: jest.fn(() => true),
+    sendText: jest.fn(),
+    sendImage: jest.fn(),
+    sendTemplate: jest.fn(),
+  };
+  const receiptService = {
+    buildReceiptData: jest.fn(() => ({ businessName: 'Mama Shop' })),
+  };
+  const receiptImageService = { render: jest.fn(async () => Buffer.from('png')) };
+  let templateName: string | undefined;
   let customer: any;
 
   const config = {
@@ -17,6 +31,7 @@ describe('PaymentsService', () => {
         FLW_SECRET_KEY: 'FLWSECK_TEST',
         FLW_SECRET_HASH: 'my-hash',
         FLW_FALLBACK_EMAIL: 'pay@ledga.ng',
+        WHATSAPP_PAYMENT_TEMPLATE: templateName,
       })[key],
   } as unknown as ConfigService;
 
@@ -25,7 +40,9 @@ describe('PaymentsService', () => {
   };
   const userModel = {
     findById: jest.fn(() => ({
-      select: () => ({ exec: async () => ({ shopName: 'Mama Shop', email: 'o@x.ng' }) }),
+      select: () => ({
+        exec: async () => ({ shopName: 'Mama Shop', email: 'o@x.ng', whatsappPhone: '2348031234567' }),
+      }),
     })),
   };
 
@@ -35,10 +52,14 @@ describe('PaymentsService', () => {
       transactionsService as any,
       customerModel as any,
       userModel as any,
+      whatsappApi as any,
+      receiptService as any,
+      receiptImageService as any,
     );
 
   beforeEach(() => {
     jest.clearAllMocks();
+    templateName = undefined;
     process.env.BACKEND_API_URL = 'https://api.example.com';
     global.fetch = fetchMock as unknown as typeof fetch;
     customer = {
@@ -97,13 +118,7 @@ describe('PaymentsService', () => {
       data: { id: 999, status: 'successful', tx_ref: `ledga-${customerId}-1` },
     };
 
-    it('rejects a webhook without the secret hash', async () => {
-      await expect(service().handleWebhook('wrong', payload)).rejects.toBeInstanceOf(
-        UnauthorizedException,
-      );
-    });
-
-    it('re-verifies with Flutterwave and records a payment once', async () => {
+    const verifiedOk = () =>
       fetchMock.mockResolvedValueOnce(
         new Response(
           JSON.stringify({
@@ -120,6 +135,16 @@ describe('PaymentsService', () => {
         ),
       );
 
+    it('ignores (with 200) a webhook without the secret hash', async () => {
+      const result = await service().handleWebhook('wrong', payload);
+      expect(result).toEqual({ recorded: false, reason: 'invalid signature' });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(transactionsService.create).not.toHaveBeenCalled();
+    });
+
+    it('re-verifies with Flutterwave and records a payment once', async () => {
+      verifiedOk();
+
       const result = await service().handleWebhook('my-hash', payload);
 
       expect(result.recorded).toBe(true);
@@ -135,6 +160,67 @@ describe('PaymentsService', () => {
         }),
         ownerId,
       );
+    });
+
+    it('tells the shop owner on WhatsApp who paid, with a receipt picture', async () => {
+      verifiedOk();
+      customer.outstandingBalance = 25000; // balance after the payment
+
+      await service().handleWebhook('my-hash', payload);
+
+      expect(whatsappApi.sendText).toHaveBeenCalledWith(
+        '2348031234567',
+        '💰 Kamau just paid you ₦15,000 online.\nKamau still owes ₦25,000.',
+      );
+      expect(whatsappApi.sendImage).toHaveBeenCalledWith(
+        '2348031234567',
+        Buffer.from('png'),
+        'Receipt from Mama Shop: payment of ₦15,000 received. Thank you!',
+      );
+    });
+
+    it('uses the approved template when the 24-hour window has closed', async () => {
+      verifiedOk();
+      templateName = 'payment_received';
+      customer.outstandingBalance = 0;
+      whatsappApi.sendText.mockRejectedValueOnce(new Error('WhatsApp send failed (400)'));
+
+      const result = await service().handleWebhook('my-hash', payload);
+
+      expect(result.recorded).toBe(true);
+      expect(whatsappApi.sendTemplate).toHaveBeenCalledWith('2348031234567', 'payment_received', [
+        'Kamau',
+        '₦15,000',
+        '₦0',
+      ]);
+    });
+
+    it('still records the payment if the WhatsApp notice fails', async () => {
+      verifiedOk();
+      whatsappApi.sendText.mockRejectedValueOnce(new Error('WhatsApp send failed (400)'));
+      const result = await service().handleWebhook('my-hash', payload);
+      expect(result.recorded).toBe(true);
+      expect(transactionsService.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('records from the checkout redirect too, but only once in total', async () => {
+      verifiedOk();
+      const first = await service().recordFromRedirect('999');
+      expect(first.recorded).toBe(true);
+
+      verifiedOk();
+      transactionsService.existsByIdempotencyKey.mockResolvedValueOnce(true);
+      const second = await service().handleWebhook('my-hash', payload);
+
+      expect(second).toEqual({ recorded: true, reason: 'already recorded' });
+      expect(transactionsService.create).toHaveBeenCalledTimes(1);
+      expect(whatsappApi.sendText).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores a redirect without a valid transaction id', async () => {
+      const result = await service().recordFromRedirect('abc');
+      expect(result.recorded).toBe(false);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('does not record when Flutterwave says the payment failed', async () => {
