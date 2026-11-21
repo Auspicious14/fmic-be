@@ -1,6 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { readFileSync } from 'fs';
 import type { ReceiptData } from './receipt.service';
+import {
+  INTER_EXT_400,
+  INTER_EXT_700,
+  INTER_LATIN_400,
+  INTER_LATIN_700,
+  INTER_MARKS_400,
+  INTER_MARKS_700,
+} from './receipt-fonts';
 
 type Node = {
   type: string;
@@ -44,38 +51,20 @@ export class ReceiptImageService {
 
   private loadFonts() {
     if (this.fonts) return this.fonts;
-    // Static paths so Vercel's file tracing ships the font files.
-    // The ₦ sign is only in the latin-ext file, so it gets its own family
-    // name and is listed as the fallback in fontFamily.
+    // Satori falls back through the families in order: letters, then ₦ and
+    // Yoruba/Hausa/Igbo letters (ṣ, ń), then dot-below vowels (ẹ, ọ).
+    const font = (name: string, weight: 400 | 700, base64: string) => ({
+      name,
+      weight,
+      data: Buffer.from(base64, 'base64'),
+    });
     this.fonts = [
-      {
-        name: 'Inter',
-        weight: 400,
-        data: readFileSync(
-          require.resolve('@fontsource/inter/files/inter-latin-400-normal.woff'),
-        ),
-      },
-      {
-        name: 'Inter',
-        weight: 700,
-        data: readFileSync(
-          require.resolve('@fontsource/inter/files/inter-latin-700-normal.woff'),
-        ),
-      },
-      {
-        name: 'InterExt',
-        weight: 400,
-        data: readFileSync(
-          require.resolve('@fontsource/inter/files/inter-latin-ext-400-normal.woff'),
-        ),
-      },
-      {
-        name: 'InterExt',
-        weight: 700,
-        data: readFileSync(
-          require.resolve('@fontsource/inter/files/inter-latin-ext-700-normal.woff'),
-        ),
-      },
+      font('Inter', 400, INTER_LATIN_400),
+      font('Inter', 700, INTER_LATIN_700),
+      font('InterExt', 400, INTER_EXT_400),
+      font('InterExt', 700, INTER_EXT_700),
+      font('InterMarks', 400, INTER_MARKS_400),
+      font('InterMarks', 700, INTER_MARKS_700),
     ];
     return this.fonts;
   }
@@ -149,7 +138,7 @@ export class ReceiptImageService {
       {
         flexDirection: 'column',
         background: COLORS.paper,
-        fontFamily: 'Inter, InterExt',
+        fontFamily: 'Inter, InterExt, InterMarks',
         color: COLORS.ink,
         padding: 48,
       },
@@ -275,12 +264,23 @@ export class ReceiptImageService {
               },
               [
                 h({ fontSize: 22, color: COLORS.muted }, 'Pay by transfer to'),
-                h({ fontSize: 30, fontWeight: 700, marginTop: 8 }, d.payTo.bank),
                 h(
-                  { fontSize: 44, fontWeight: 700, marginTop: 4, letterSpacing: 2 },
+                  { fontSize: 30, fontWeight: 700, marginTop: 8 },
+                  d.payTo.bank,
+                ),
+                h(
+                  {
+                    fontSize: 44,
+                    fontWeight: 700,
+                    marginTop: 4,
+                    letterSpacing: 2,
+                  },
                   d.payTo.accountNumber,
                 ),
-                h({ fontSize: 24, marginTop: 4, textAlign: 'center' }, d.payTo.accountName),
+                h(
+                  { fontSize: 24, marginTop: 4, textAlign: 'center' },
+                  d.payTo.accountName,
+                ),
               ],
             )
           : null,

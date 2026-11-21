@@ -8,7 +8,7 @@ describe('ReceiptImageService', () => {
     businessName: 'Mama Shop',
     businessPhone: '',
     businessAddress: '',
-    customerName: 'Alfa',
+    customerName: 'Ọlá Àjàlá Ṣẹ̀gun',
     customerPhone: '',
     items: [
       { productName: 'Rice', quantity: 2, unitPrice: 700, totalPrice: 1400 },
