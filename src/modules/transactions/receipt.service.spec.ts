@@ -291,4 +291,39 @@ describe('ReceiptService', () => {
       expect(url).toContain('wa.me/2348012345678');
     });
   });
+
+  describe('where to pay', () => {
+    const owing = { ...mockCustomer, outstandingBalance: 2950 };
+    const withAccount = {
+      ...mockShopOwner,
+      payoutBank: 'OPay',
+      payoutAccountNumber: '8031234567',
+      payoutAccountName: 'Emeka Obi',
+    };
+
+    it("shows the shop's own account and no Flutterwave link when one is set", () => {
+      const data = service.buildReceiptData(mockTransaction, owing, withAccount);
+      expect(data.payTo).toEqual({ bank: 'OPay', accountNumber: '8031234567', accountName: 'Emeka Obi' });
+      expect(data.payUrl).toBeNull();
+      expect(service.generateReceiptHtml(data)).toContain('OPay · 8031234567');
+      expect(service.generateWhatsAppMessage(data)).toContain('Pay by transfer:* OPay 8031234567 (Emeka Obi)');
+    });
+
+    it('falls back to the pay link when no account is set', () => {
+      process.env.BACKEND_API_URL = 'https://api.example.com';
+      process.env.FLW_SECRET_KEY = 'FLWSECK_TEST';
+      const data = service.buildReceiptData(mockTransaction, owing, mockShopOwner);
+      delete process.env.FLW_SECRET_KEY;
+      expect(data.payTo).toBeNull();
+      expect(data.payUrl).toContain('/api/pay/cust-1');
+    });
+
+    it('escapes what the trader typed', () => {
+      const data = service.buildReceiptData(mockTransaction, owing, {
+        ...withAccount,
+        payoutAccountName: '<script>x</script>',
+      });
+      expect(service.generateReceiptHtml(data)).not.toContain('<script>x</script>');
+    });
+  });
 });

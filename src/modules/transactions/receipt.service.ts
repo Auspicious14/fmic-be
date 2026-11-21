@@ -4,11 +4,16 @@ import {
   buildPayUrl,
   buildPublicReceiptUrl,
 } from '../../common/utils/signed-link';
+import { formatPayout, PayoutDetails } from '../../common/utils/banks';
 import {
   LAGOS_TIME_ZONE,
   lagosDateCompact,
   lagosDateString,
 } from '../../common/utils/lagos-time';
+
+/** Trader-typed text going into receipt HTML. */
+const escapeHtml = (text: string) =>
+  String(text ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 export interface ReceiptData {
   transactionId: string;
@@ -37,7 +42,12 @@ export interface ReceiptData {
   notes?: string;
   /** What the customer owes in total right now (all receipts). */
   outstandingBalance?: number;
-  /** Flutterwave "Pay now" link for that balance, when payments are set up. */
+  /** The shop's own account to pay into by transfer, when set. */
+  payTo?: PayoutDetails | null;
+  /**
+   * Flutterwave "Pay now" link. Only used when the shop has no account set:
+   * money paid this way lands in Ledga's Flutterwave balance, not the shop's.
+   */
   payUrl?: string | null;
   /** Link the customer can open without logging in. */
   receiptUrl?: string | null;
@@ -88,6 +98,15 @@ export class ReceiptService {
       totalPrice: item.totalPrice || item.quantity * item.unitPriceAtSale,
     }));
 
+    const payTo: PayoutDetails | null =
+      shopOwner?.payoutBank && shopOwner?.payoutAccountNumber
+        ? {
+            bank: shopOwner.payoutBank,
+            accountNumber: shopOwner.payoutAccountNumber,
+            accountName: shopOwner.payoutAccountName || '',
+          }
+        : null;
+
     const subtotal = transaction.totalAmount;
     const tax = Math.round(subtotal * TAX_RATE * 100) / 100;
     const totalAmount = subtotal + tax;
@@ -127,8 +146,9 @@ export class ReceiptService {
       notes: transaction.voiceTranscript,
       outstandingBalance: customer?.outstandingBalance,
       receiptUrl: buildPublicReceiptUrl(transaction._id.toString()),
+      payTo,
       payUrl:
-        customer?.outstandingBalance > 0
+        !payTo && customer?.outstandingBalance > 0
           ? buildPayUrl(customer?._id?.toString?.() ?? '')
           : null,
     };
@@ -196,6 +216,7 @@ export class ReceiptService {
   .total-value { font-size: 14px; color: #0f172a; font-weight: 700; }
   .total-value.final { color: #ffffff; font-size: 22px; font-weight: 900; }
   .pay-section { padding: 0 28px 20px; }
+  .pay-account { text-align: center; font-size: 20px; font-weight: 800; color: #0f172a; margin: 6px 0; letter-spacing: 0.5px; }
   .pay-button { display: block; text-align: center; background: #16a34a; color: #ffffff; text-decoration: none; font-weight: 800; font-size: 15px; padding: 14px 16px; border-radius: 14px; }
   .pay-hint { text-align: center; font-size: 11px; color: #64748b; margin-top: 8px; }
   .notes-section { padding: 16px 28px; border-top: 1px dashed #e2e8f0; }
@@ -290,6 +311,18 @@ export class ReceiptService {
       </div>
 
       ${
+        data.payTo && (data.outstandingBalance ?? 0) > 0
+          ? `
+      <!-- Pay by transfer to the shop's own account -->
+      <div class="pay-section">
+        <div class="pay-hint">Pay ${formatCurrency(data.outstandingBalance ?? 0)} by transfer to</div>
+        <div class="pay-account">${escapeHtml(data.payTo.bank)} · ${escapeHtml(data.payTo.accountNumber)}</div>
+        <div class="pay-hint">${escapeHtml(data.payTo.accountName)}</div>
+      </div>`
+          : ''
+      }
+
+      ${
         data.payUrl
           ? `
       <!-- Pay now (Flutterwave) -->
@@ -362,7 +395,7 @@ ${itemsList}
 💰 *TOTAL: ${formatCurrency(data.totalAmount)}*
 ${data.notes ? `\n📝 _${data.notes}_` : ''}
 
-${data.receiptUrl ? `\n🧾 View receipt: ${data.receiptUrl}` : ''}${data.payUrl ? `\n💳 *Pay ${formatCurrency(data.outstandingBalance ?? 0)} now:* ${data.payUrl}\n` : ''}
+${data.receiptUrl ? `\n🧾 View receipt: ${data.receiptUrl}` : ''}${data.payTo && (data.outstandingBalance ?? 0) > 0 ? `\n🏦 *Pay by transfer:* ${formatPayout(data.payTo)}\n` : ''}${data.payUrl ? `\n💳 *Pay ${formatCurrency(data.outstandingBalance ?? 0)} now:* ${data.payUrl}\n` : ''}
 _Thank you for your business!_
 _Powered by Ledga_`;
   }

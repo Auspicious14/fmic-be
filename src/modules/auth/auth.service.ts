@@ -11,6 +11,7 @@ import * as bcrypt from 'bcrypt';
 import { User, UserDocument } from './schemas/user.schema';
 import { LoginDto, RegisterDto } from './dto/auth.dto';
 import { normalizeNigerianPhone } from '../../common/utils/phone';
+import { parsePayoutDetails } from '../../common/utils/banks';
 
 @Injectable()
 export class AuthService {
@@ -87,6 +88,32 @@ export class AuthService {
       .findByIdAndUpdate(
         userId,
         normalized ? { whatsappPhone: normalized } : { $unset: { whatsappPhone: 1 } },
+        { new: true },
+      )
+      .select('-password');
+  }
+
+  /** Saves (or clears, with null) the account customers pay into. */
+  async setPayout(
+    userId: string,
+    input: { bank?: string; accountNumber?: string; accountName?: string } | null,
+  ) {
+    if (!input || (!input.bank && !input.accountNumber && !input.accountName)) {
+      return this.userModel
+        .findByIdAndUpdate(
+          userId,
+          { $unset: { payoutBank: 1, payoutAccountNumber: 1, payoutAccountName: 1 } },
+          { new: true },
+        )
+        .select('-password');
+    }
+    const parsed = parsePayoutDetails(input);
+    if ('error' in parsed) throw new BadRequestException(parsed.error);
+    const { bank, accountNumber, accountName } = parsed.details;
+    return this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { payoutBank: bank, payoutAccountNumber: accountNumber, payoutAccountName: accountName },
         { new: true },
       )
       .select('-password');

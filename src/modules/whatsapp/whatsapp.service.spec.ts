@@ -36,7 +36,10 @@ describe('WhatsappService', () => {
   let pending: any;
   const seen = new Set<string>();
 
-  const userModel = { findOne: jest.fn(() => ({ exec: async () => linkedUser })) };
+  const userModel = {
+    findOne: jest.fn(() => ({ exec: async () => linkedUser })),
+    updateOne: jest.fn(() => ({ exec: async () => ({}) })),
+  };
   const pendingModel = {
     findOne: jest.fn(() => ({ exec: async () => pending })),
     findOneAndUpdate: jest.fn(async (_q: any, doc: any) => {
@@ -522,6 +525,84 @@ describe('WhatsappService', () => {
 
       expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('Nobody owes you'));
       expect(pending.sourceMessageId).toBe('v9');
+    });
+  });
+
+  describe('where customers pay', () => {
+    const payoutMessage = (payout: any) =>
+      voiceService.processTranscript.mockResolvedValue({
+        transactions: [
+          {
+            intent: VoiceIntent.PAYOUT_DETAILS,
+            resolvedCustomer: { name: '', isNew: false, isAmbiguous: false },
+            payout,
+          },
+        ],
+        overall_transcript: 'my account',
+      });
+
+    it('saves "my account na OPay 08031234567, Abdulganiyu Uthman" and shows it back', async () => {
+      payoutMessage({ bank: 'opay', accountNumber: '08031234567', accountName: 'Abdulganiyu Uthman' });
+      await service.handleMessage({ id: 'p1', from: phone, type: 'text', text: { body: 'my account na opay' } });
+      expect(userModel.updateOne).toHaveBeenCalledWith(
+        { _id: 'user-1' },
+        { payoutBank: 'OPay', payoutAccountNumber: '8031234567', payoutAccountName: 'Abdulganiyu Uthman' },
+      );
+      expect(api.sendText).toHaveBeenCalledWith(
+        phone,
+        expect.stringContaining('🏦 OPay 8031234567 (Abdulganiyu Uthman)'),
+      );
+      expect(api.sendButtons).not.toHaveBeenCalled();
+    });
+
+    it('says what is missing instead of saving a bad account', async () => {
+      payoutMessage({ bank: 'GTB', accountNumber: '12345', accountName: 'Ade' });
+      await service.handleMessage({ id: 'p2', from: phone, type: 'text', text: { body: 'my gtb 12345' } });
+      expect(userModel.updateOne).not.toHaveBeenCalled();
+      expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('10 digits'));
+    });
+
+    it("puts the shop's account in the receipt caption instead of a pay link", async () => {
+      pending = { phone, userId: 'user-1', sourceMessageId: 'p3', interpretation: creditSale };
+      customersService.create.mockResolvedValue({ _id: { toString: () => 'cust-1' } });
+      transactionsService.create.mockResolvedValue({ _id: { toString: () => 'tx-1' } });
+      customersService.findOne.mockResolvedValue({ name: 'Gani', phone: '', outstandingBalance: 900 });
+      receiptService.buildReceiptData.mockReturnValueOnce({
+        businessName: 'Mama Shop',
+        transactionType: 'credit',
+        totalAmount: 900,
+        outstandingBalance: 900,
+        payTo: { bank: 'OPay', accountNumber: '8031234567', accountName: 'Abdulganiyu Uthman' },
+        payUrl: null,
+      } as any);
+      receiptImageService.render.mockResolvedValue(Buffer.from('png'));
+
+      await service.handleMessage({
+        id: 'p4',
+        from: phone,
+        type: 'interactive',
+        interactive: { button_reply: { id: 'ledga_confirm' } },
+      });
+
+      expect(api.sendImage.mock.calls[0][2]).toBe(
+        'Receipt from Mama Shop. You owe ₦900 in total.\nPay by transfer: OPay 8031234567 (Abdulganiyu Uthman)',
+      );
+    });
+
+    it('suggests adding an account after a credit sale when none is set', async () => {
+      pending = { phone, userId: 'user-1', sourceMessageId: 'p5', interpretation: creditSale };
+      customersService.create.mockResolvedValue({ _id: { toString: () => 'cust-1' } });
+      transactionsService.create.mockResolvedValue({ _id: { toString: () => 'tx-1' } });
+      customersService.findOne.mockResolvedValue({ name: 'Gani', phone: '', outstandingBalance: 900 });
+
+      await service.handleMessage({
+        id: 'p6',
+        from: phone,
+        type: 'interactive',
+        interactive: { button_reply: { id: 'ledga_confirm' } },
+      });
+
+      expect(api.sendText.mock.calls.at(-1)[1]).toContain('Tell customers where to pay you');
     });
   });
 });

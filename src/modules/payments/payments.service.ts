@@ -215,14 +215,16 @@ export class PaymentsService {
    * Tells the trader on WhatsApp who paid, with a receipt to forward.
    * WhatsApp only allows free-form messages within 24 hours of the trader's
    * last message; after that, an approved template is needed
-   * (WHATSAPP_PAYMENT_TEMPLATE, body: "{{1}} paid you {{2}} online. They now owe {{3}}.").
+   * (WHATSAPP_PAYMENT_TEMPLATE, a Utility template in English whose body has
+   * {{1}} customer name, {{2}} amount paid, {{3}} balance left, e.g.
+   * "Payment alert: {{1}} paid you {{2}} online through Ledga. Their balance is now {{3}}. Reply to see who owes you.").
    */
   private async notifyShop(saved: any, customerId: string, amount: number): Promise<void> {
     const customer = await this.customerModel.findById(customerId).exec();
     if (!customer) return;
     const owner = await this.userModel
       .findById(customer.shopOwner)
-      .select('name shopName whatsappPhone')
+      .select('name shopName whatsappPhone payoutBank payoutAccountNumber payoutAccountName')
       .exec();
     const phone = owner?.whatsappPhone;
     if (!phone || !this.whatsappApi.isEnabled()) return;

@@ -265,6 +265,25 @@ export class VoiceService {
         processedTransactions.push(await this.buildQuestion(rawTx, userId));
         continue;
       }
+      if (rawTx.intent === VoiceIntent.PAYOUT_DETAILS) {
+        processedTransactions.push({
+          intent: VoiceIntent.PAYOUT_DETAILS,
+          resolvedCustomer: { name: '', isNew: false, isAmbiguous: false },
+          items: [],
+          total_amount: 0,
+          transaction_type: 'payout_details',
+          confidence_score: rawTx.confidence_score ?? 0,
+          reasoning_summary: rawTx.reasoning_summary ?? '',
+          payout: {
+            bank: rawTx.data?.bank ?? undefined,
+            accountNumber:
+              rawTx.data?.account_number != null ? String(rawTx.data.account_number) : undefined,
+            accountName: rawTx.data?.account_name ?? undefined,
+          },
+          warnings: [],
+        });
+        continue;
+      }
       if (!rawTx.data?.debtor && rawTx.intent !== VoiceIntent.DAILY_SUMMARY) {
         this.logger.warn(
           `[VoiceService] No debtor extracted from transcript: "${transcript}"`,

@@ -370,7 +370,7 @@ export class TransactionsService {
     const transaction = await this.transactionModel
       .findById(id)
       .populate('customer', 'name phone outstandingBalance')
-      .populate('shopOwner', 'shopName name')
+      .populate('shopOwner', 'shopName name payoutBank payoutAccountNumber payoutAccountName')
       .exec();
     if (!transaction) throw new NotFoundException('Receipt not found');
     const data = this.receiptService.buildReceiptData(
@@ -382,16 +382,31 @@ export class TransactionsService {
   }
 
   /**
+   * The shop's name and payout account for a receipt. The logged-in user
+   * object only carries the token's fields, so load them from the database.
+   */
+  private async shopOwnerFor(transaction: any, fallback: any) {
+    try {
+      const populated = await transaction.populate('shopOwner', 'shopName name payoutBank payoutAccountNumber payoutAccountName');
+      const owner = populated?.shopOwner;
+      return owner && typeof owner === 'object' && 'shopName' in owner ? owner : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  /**
    * Generate receipt data for a specific transaction
    */
   async getReceiptData(transactionId: string, userId: string, shopOwner: any) {
     const transaction = await this.findOne(transactionId, userId);
     const customer = (transaction as any).customer;
+    const owner = await this.shopOwnerFor(transaction, shopOwner);
 
     const receiptData = this.receiptService.buildReceiptData(
       transaction,
       customer,
-      shopOwner,
+      owner,
     );
 
     return {
@@ -411,11 +426,12 @@ export class TransactionsService {
   ) {
     const transaction = await this.findOne(transactionId, userId);
     const customer = (transaction as any).customer;
+    const owner = await this.shopOwnerFor(transaction, shopOwner);
 
     const receiptData = this.receiptService.buildReceiptData(
       transaction,
       customer,
-      shopOwner,
+      owner,
     );
 
     const message = this.receiptService.generateWhatsAppMessage(receiptData);

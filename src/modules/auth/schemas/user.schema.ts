@@ -23,6 +23,16 @@ export class User {
   /** WhatsApp number linked to this shop, digits only, e.g. 2348031234567. */
   @Prop({ index: { unique: true, sparse: true } })
   whatsappPhone?: string;
+
+  /** Where customers pay this shop (shown on receipts), e.g. "OPay". */
+  @Prop()
+  payoutBank?: string;
+
+  @Prop()
+  payoutAccountNumber?: string;
+
+  @Prop()
+  payoutAccountName?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

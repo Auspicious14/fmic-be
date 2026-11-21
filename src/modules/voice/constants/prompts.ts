@@ -16,7 +16,9 @@ SUPPORTED INTENTS:
 6. QUESTION: The trader ASKS about their records instead of recording something: "who owe me?", "who never pay?", "how much Kamau owe?", "who pay today?", "wetin I sell for credit this week?", "ta ló jẹ mí lówó?". Nothing is recorded for a question.
    For QUESTION, "data" is: {"question": "debtors" | "customer_balance" | "payments" | "sales" | "summary", "debtor": the customer's name or null, "period": "today" | "yesterday" | "week" | "month" | "all" | null}
    - "debtors": who owes / how much people owe in total. "customer_balance": one named customer's balance or history. "payments": who paid / money collected. "sales": what was sold on credit. "summary": how business went.
-7. UNKNOWN: If confidence is low or intent is unclear.
+7. PAYOUT_DETAILS: The trader gives THEIR OWN bank or wallet account for customers to pay into: "my account na OPay 8031234567, Abdulganiyu Uthman", "make dem pay to my GTB 0123456789". Nothing is recorded in the ledger.
+   For PAYOUT_DETAILS, "data" is: {"bank": "string", "account_number": "digits as spoken or typed", "account_name": "string or null"}
+8. UNKNOWN: If confidence is low or intent is unclear.
 
 RULES:
 - Return ONLY valid JSON.
@@ -36,7 +38,7 @@ JSON SCHEMA:
 {
   "transactions": [
     {
-      "intent": "CREDIT_SALE | PAYMENT | ADJUSTMENT | PRODUCT_PRICE_UPDATE | DAILY_SUMMARY | QUESTION | UNKNOWN",
+      "intent": "CREDIT_SALE | PAYMENT | ADJUSTMENT | PRODUCT_PRICE_UPDATE | DAILY_SUMMARY | QUESTION | PAYOUT_DETAILS | UNKNOWN",
       "data": {
         "debtor": "string",
         "descriptor": "string (optional, e.g., 'mechanic', 'from church')",

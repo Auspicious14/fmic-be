@@ -41,4 +41,15 @@ export class AuthController {
   async setWhatsapp(@GetUser() user: any, @Body() body: { phone?: string | null }) {
     return this.authService.setWhatsappPhone(user.userId, body?.phone ?? null);
   }
+
+  @Patch('payout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Set the bank account customers pay into (shown on receipts)' })
+  async setPayout(
+    @GetUser() user: any,
+    @Body() body: { bank?: string; accountNumber?: string; accountName?: string } | null,
+  ) {
+    return this.authService.setPayout(user.userId, body ?? null);
+  }
 }

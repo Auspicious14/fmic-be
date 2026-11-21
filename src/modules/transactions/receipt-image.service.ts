@@ -248,7 +248,7 @@ export class ReceiptImageService {
               },
               balance > 0 ? naira(balance) : 'All paid',
             ),
-            balance > 0 && d.payUrl
+            balance > 0 && !d.payTo && d.payUrl
               ? h(
                   {
                     fontSize: 22,
@@ -262,6 +262,29 @@ export class ReceiptImageService {
           ].filter(Boolean),
         ),
 
+        // Where to pay: the shop's own bank or wallet account.
+        balance > 0 && d.payTo
+          ? h(
+              {
+                flexDirection: 'column',
+                alignItems: 'center',
+                marginTop: 20,
+                padding: '24px',
+                borderRadius: 24,
+                border: `2px solid ${COLORS.line}`,
+              },
+              [
+                h({ fontSize: 22, color: COLORS.muted }, 'Pay by transfer to'),
+                h({ fontSize: 30, fontWeight: 700, marginTop: 8 }, d.payTo.bank),
+                h(
+                  { fontSize: 44, fontWeight: 700, marginTop: 4, letterSpacing: 2 },
+                  d.payTo.accountNumber,
+                ),
+                h({ fontSize: 24, marginTop: 4, textAlign: 'center' }, d.payTo.accountName),
+              ],
+            )
+          : null,
+
         h(
           {
             justifyContent: 'center',
@@ -274,7 +297,7 @@ export class ReceiptImageService {
             h({ fontWeight: 700, color: COLORS.brand, marginLeft: 6 }, 'Ledga'),
           ],
         ),
-      ],
+      ].filter(Boolean),
     );
   }
 }

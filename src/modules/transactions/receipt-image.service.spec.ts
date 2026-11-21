@@ -52,4 +52,15 @@ describe('ReceiptImageService', () => {
         png,
       );
   });
+
+  it('shows the shop account to pay into by transfer', async () => {
+    const png = await new ReceiptImageService().render({
+      ...base,
+      payUrl: null,
+      payTo: { bank: 'OPay', accountNumber: '8031234567', accountName: 'Abdulganiyu Uthman' },
+    });
+    expect(png).not.toBeNull();
+    if (process.env.RECEIPT_PNG_OUT)
+      require('fs').writeFileSync(`${process.env.RECEIPT_PNG_OUT}/transfer.png`, png);
+  });
 });

@@ -16,6 +16,7 @@ import {
 } from '../transactions/ledger-query.service';
 import { TransactionType } from '../transactions/schemas/transaction.schema';
 import { LAGOS_TIME_ZONE } from '../../common/utils/lagos-time';
+import { formatPayout, parsePayoutDetails } from '../../common/utils/banks';
 import { buildPublicReceiptUrl } from '../../common/utils/signed-link';
 import { WhatsappApiService } from './whatsapp-api.service';
 import {
@@ -239,6 +240,14 @@ export class WhatsappService {
       return this.sendDailySummary(from, userId);
     }
 
+    // "My account na OPay 8031234567, …": saved straight away, shown back.
+    const payout = transactions.find((t) => t.intent === VoiceIntent.PAYOUT_DETAILS);
+    if (payout) {
+      await this.api.sendText(from, await this.savePayout(userId, payout.payout ?? {}));
+      transactions = transactions.filter((t) => t.intent !== VoiceIntent.PAYOUT_DETAILS);
+      if (!transactions.length) return;
+    }
+
     // Questions ("who owe me?") are answered straight away; nothing is saved.
     const questions = transactions.filter((t) => t.intent === VoiceIntent.QUESTION);
     if (questions.length) {
@@ -390,9 +399,14 @@ export class WhatsappService {
       );
     }
 
+    const owesSomething = transactions.some((t) => t.intent === VoiceIntent.CREDIT_SALE);
+    const tip =
+      replies.length && owesSomething && !user.payoutAccountNumber
+        ? '\n\n💡 Tell customers where to pay you: send your account, e.g. "My account na OPay 8031234567, Abdulganiyu Uthman". It will show on every receipt.'
+        : '';
     await this.api.sendText(
       from,
-      replies.length ? replies.join('\n\n') : 'Nothing was saved. Abeg try again.',
+      replies.length ? `${replies.join('\n\n')}${tip}` : 'Nothing was saved. Abeg try again.',
     );
   }
 
@@ -413,7 +427,14 @@ export class WhatsappService {
             balance > 0 ? `You still owe ${naira(balance)}.` : 'Thank you!'
           }`
         : `Receipt from ${shop}. You owe ${naira(balance)} in total.`;
-    const payLine = balance > 0 && receipt.payUrl ? `\nPay online: ${receipt.payUrl}` : '';
+    const payLine =
+      balance <= 0
+        ? ''
+        : receipt.payTo
+          ? `\nPay by transfer: ${formatPayout(receipt.payTo)}`
+          : receipt.payUrl
+            ? `\nPay online: ${receipt.payUrl}`
+            : '';
     try {
       await this.api.sendImage(to, png, `${caption}${payLine}`);
       return true;
@@ -421,6 +442,25 @@ export class WhatsappService {
       this.logger.warn(`[WhatsApp] receipt image not sent: ${(error as Error).message}`);
       return false;
     }
+  }
+
+  /** Saves the trader's own account from a message like "my account na OPay …". */
+  private async savePayout(
+    userId: string,
+    input: { bank?: string; accountNumber?: string; accountName?: string },
+  ): Promise<string> {
+    const parsed = parsePayoutDetails(input);
+    if ('error' in parsed) {
+      return `${parsed.error}\nSend am like this: "My account na OPay 8031234567, Abdulganiyu Uthman".`;
+    }
+    const { bank, accountNumber, accountName } = parsed.details;
+    await this.userModel
+      .updateOne(
+        { _id: userId },
+        { payoutBank: bank, payoutAccountNumber: accountNumber, payoutAccountName: accountName },
+      )
+      .exec();
+    return `✅ Saved. Your customers will see this on their receipts:\n🏦 ${formatPayout(parsed.details)}\n\nIf e no correct, send am again.`;
   }
 
   /** Answers "who owe me?", "how much Kamau owe?", "who pay this week?". */
@@ -534,6 +574,7 @@ export class WhatsappService {
       '• "How today go?" for your daily summary',
       '• "Who owe me?" or "How much Kamau owe?"',
       '• "Who pay this week?"',
+      '• "My account na OPay 8031234567, Your Name" so customers know where to pay',
       '',
       "I'll show you what I heard, and you tap ✅ to save it.",
     ].join('\n');
