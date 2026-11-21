@@ -102,6 +102,12 @@ export class WhatsappService {
       await this.api.sendText(from, '🎧 Got it, listening…');
       const audio = await this.api.downloadMedia(message.audio.id);
       const result = await this.voiceService.processAudio(audio, userId);
+      // A voice note while an entry waits may be a correction of it.
+      const pending = await this.pendingModel.findOne({ phone: from }).exec();
+      const said = String(result?.overall_transcript ?? '').trim();
+      if (pending && said) {
+        return this.applyReply(from, userId, message.id, pending, said, result);
+      }
       return this.askToConfirm(from, userId, message.id, result);
     }
 
@@ -114,6 +120,8 @@ export class WhatsappService {
       if (!text || ['hi', 'hello', 'help', 'menu', 'start'].includes(lower)) {
         return this.api.sendText(from, this.helpText(user.shopName || user.name));
       }
+      // Anything else while an entry waits is a reply to it: "no, na Kamau".
+      if (pending) return this.applyReply(from, userId, message.id, pending, text);
       const result = await this.voiceService.processTranscript({ transcript: text }, userId);
       return this.askToConfirm(from, userId, message.id, result);
     }
@@ -124,11 +132,88 @@ export class WhatsappService {
     );
   }
 
+  /**
+   * The trader answered the waiting entry with something other than ✅/❌.
+   * The AI decides if it's a fix, a new entry, or unclear. A fix is shown
+   * again for ✅: the bot never saves on its own.
+   */
+  private async applyReply(
+    from: string,
+    userId: string,
+    messageId: string,
+    pending: WhatsappPendingDocument,
+    reply: string,
+    replyResult?: any,
+  ): Promise<void> {
+    const heard = String(pending.interpretation?.overall_transcript ?? '').trim();
+    let revision: Awaited<ReturnType<VoiceService['reviseTranscript']>> = { action: 'new' };
+    if (heard) {
+      try {
+        revision = await this.voiceService.reviseTranscript(heard, reply, userId);
+      } catch (error) {
+        this.logger.warn(
+          `[WhatsApp] correction check failed, treating as new: ${(error as Error).message}`,
+        );
+      }
+    }
+
+    if (revision.action === 'unclear') {
+      // The waiting entry stays; the next reply can still fix it.
+      return this.api.sendText(from, revision.question);
+    }
+
+    if (revision.action === 'correct') {
+      const result = await this.voiceService.processTranscript(
+        { transcript: revision.transcript },
+        userId,
+      );
+      return this.askToConfirm(from, userId, messageId, result, {
+        intro: `Okay, I don change am: "${revision.transcript}"`,
+      });
+    }
+
+    const result =
+      replyResult ??
+      (await this.voiceService.processTranscript({ transcript: reply }, userId));
+    const hadEntries = (pending.interpretation?.transactions ?? []).length > 0;
+    return this.askToConfirm(from, userId, messageId, result, {
+      note: hadEntries ? '(I no save the one before. This na new one.)' : undefined,
+    });
+  }
+
+  /**
+   * Keeps what was heard when nothing could be offered for ✅ (no price,
+   * unsure customer), so the trader's next reply ("na 1800") can fix it.
+   */
+  private async rememberHeard(
+    from: string,
+    userId: string,
+    messageId: string,
+    result: any,
+  ): Promise<void> {
+    if (!String(result?.overall_transcript ?? '').trim()) return;
+    await this.pendingModel.findOneAndUpdate(
+      { phone: from },
+      {
+        phone: from,
+        userId,
+        sourceMessageId: messageId,
+        interpretation: {
+          overall_transcript: result.overall_transcript,
+          transactions: [],
+        },
+        createdAt: new Date(),
+      },
+      { upsert: true },
+    );
+  }
+
   private async askToConfirm(
     from: string,
     userId: string,
     messageId: string,
     result: any,
+    options: { intro?: string; note?: string } = {},
   ): Promise<void> {
     const transactions: any[] = result?.transactions ?? [];
 
@@ -150,16 +235,18 @@ export class WhatsappService {
     const ambiguous = transactions.filter((t) => t.resolvedCustomer?.isAmbiguous && RECORDABLE.includes(t.intent));
 
     if (recordable.length === 0 && unpriced.length) {
+      await this.rememberHeard(from, userId, messageId, result);
       return this.api.sendText(
         from,
-        `I hear ${this.describe(unpriced[0]).replace(/ owes ₦0/, ' bought something')}, but I no hear the price. Abeg send am again with the total, e.g. "… 2 peak milk, 800 naira".`,
+        `I hear ${this.describe(unpriced[0]).replace(/ owes ₦0/, ' bought something')}, but I no hear the price. Wetin be the total? Reply with am, e.g. "na 1800".`,
       );
     }
 
     if (recordable.length === 0) {
       const hint = ambiguous.length
-        ? `I no sure which customer you mean ("${ambiguous[0].resolvedCustomer?.name}"). Abeg add their tag, e.g. "Tunde mechanic".`
+        ? `I no sure which customer you mean ("${ambiguous[0].resolvedCustomer?.name}"). Reply with their tag, e.g. "Tunde mechanic".`
         : 'I no understand well well. Abeg talk am again, e.g. "Mama Tunde collect 2 rice, she go pay Friday."';
+      if (ambiguous.length) await this.rememberHeard(from, userId, messageId, result);
       return this.api.sendText(from, hint);
     }
 
@@ -179,7 +266,10 @@ export class WhatsappService {
       const warnings = (t.warnings ?? []).map((w: string) => `   ⚠️ ${w}`);
       return [`${i + 1}. ${this.describe(t)}`, ...warnings].join('\n');
     });
-    const heard = result?.overall_transcript ? `I heard: "${result.overall_transcript}"\n\n` : '';
+    const heardLine =
+      options.intro ??
+      (result?.overall_transcript ? `I heard: "${result.overall_transcript}"` : '');
+    const heard = [options.note, heardLine].filter(Boolean).map((l) => `${l}\n\n`).join('');
     const skipped = [
       ambiguous.length
         ? `(Skipped "${ambiguous[0].resolvedCustomer?.name}": not sure which customer.)`
@@ -202,9 +292,19 @@ export class WhatsappService {
   }
 
   private async confirm(from: string, user: UserDocument): Promise<void> {
-    const pending = await this.pendingModel.findOneAndDelete({ phone: from }).exec();
+    // Only entries that can be saved are taken; a "what's the price?"
+    // question stays so the trader can still answer it.
+    const pending = await this.pendingModel
+      .findOneAndDelete({ phone: from, 'interpretation.transactions.0': { $exists: true } })
+      .exec();
     if (!pending) {
-      return this.api.sendText(from, 'Nothing is waiting to be saved. Send a new voice note.');
+      const waiting = await this.pendingModel.findOne({ phone: from }).exec();
+      return this.api.sendText(
+        from,
+        waiting
+          ? 'Nothing is ready to save yet. Tell me the correct name, item or price, or send a new voice note.'
+          : 'Nothing is waiting to be saved. Send a new voice note.',
+      );
     }
     const userId = user._id.toString();
     const replies: string[] = [];

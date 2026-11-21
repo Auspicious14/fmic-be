@@ -4,12 +4,21 @@ import Groq from 'groq-sdk';
 import Redis from 'ioredis';
 import { createHash } from 'crypto';
 import { createOptionalRedis } from '../../../common/utils/optional-redis';
-import { LLAMA_SYSTEM_PROMPT } from '../constants/prompts';
+import {
+  CORRECTION_SYSTEM_PROMPT,
+  LLAMA_SYSTEM_PROMPT,
+} from '../constants/prompts';
 
 export interface AsrCandidate {
   text: string;
   confidence: number;
   language: 'yo' | 'en' | 'pcm';
+}
+
+export interface RevisionResult {
+  action?: string;
+  transcript?: string | null;
+  question?: string | null;
 }
 
 @Injectable()
@@ -340,6 +349,29 @@ export class GroqService {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
+  }
+
+  /** Applies the trader's correction to what was heard (see CORRECTION_SYSTEM_PROMPT). */
+  async reviseTranscript(
+    heard: string,
+    reply: string,
+    shopContext?: string,
+  ): Promise<RevisionResult> {
+    const response = await this.groq.chat.completions.create({
+      messages: [
+        { role: 'system', content: CORRECTION_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: `${shopContext ? `${shopContext}\n\n` : ''}HEARD: "${heard}"\nREPLY: "${reply}"`,
+        },
+      ],
+      model: this.model,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+    });
+    return JSON.parse(
+      response.choices[0].message.content || '{}',
+    ) as RevisionResult;
   }
 
   private async cacheGet(key: string): Promise<string | null> {

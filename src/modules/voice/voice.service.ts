@@ -207,6 +207,43 @@ export class VoiceService {
   }
 
   /**
+   * The trader replied to what we heard ("no, na Kamau"). Works out whether
+   * the reply fixes it, is a new entry, or is unclear. A fix comes back as a
+   * corrected sentence for processTranscript, so every check runs again.
+   */
+  async reviseTranscript(
+    heard: string,
+    reply: string,
+    userId: string,
+  ): Promise<
+    | { action: 'correct'; transcript: string }
+    | { action: 'new' }
+    | { action: 'unclear'; question: string }
+  > {
+    const products = await this.productsService.findAll(userId);
+    const { customers } = await this.customersService.findAll(userId);
+    const raw = await this.groqService.reviseTranscript(
+      heard,
+      reply,
+      buildShopContextBlock(customers, products),
+    );
+    const transcript = String(raw?.transcript ?? '').trim();
+    this.logger.log(
+      `[VoiceService] correction heard="${heard}" reply="${reply}" -> ${raw?.action} "${transcript}"`,
+    );
+    if (raw?.action === 'new') return { action: 'new' };
+    if (raw?.action === 'correct' && transcript) {
+      return { action: 'correct', transcript };
+    }
+    return {
+      action: 'unclear',
+      question:
+        String(raw?.question ?? '').trim() ||
+        'Wetin I go change? Tell me the correct name, item or price.',
+    };
+  }
+
+  /**
    * Turns raw AI output into resolved, price-checked transactions.
    * Money is computed here (quantity x unit price), never trusted from the AI.
    */

@@ -12,7 +12,11 @@ describe('WhatsappService', () => {
     sendButtons: jest.fn(),
     downloadMedia: jest.fn(),
   };
-  const voiceService = { processAudio: jest.fn(), processTranscript: jest.fn() };
+  const voiceService = {
+    processAudio: jest.fn(),
+    processTranscript: jest.fn(),
+    reviseTranscript: jest.fn(),
+  };
   const customersService = { create: jest.fn(), findOne: jest.fn() };
   const transactionsService = { create: jest.fn(), getDailySummary: jest.fn() };
   const receiptService = {
@@ -31,9 +35,13 @@ describe('WhatsappService', () => {
     findOneAndUpdate: jest.fn(async (_q: any, doc: any) => {
       pending = doc;
     }),
-    findOneAndDelete: jest.fn(() => ({
+    findOneAndDelete: jest.fn((q: any) => ({
       exec: async () => {
         const p = pending;
+        if (!p) return null;
+        if (q?.['interpretation.transactions.0'] && !p.interpretation?.transactions?.length) {
+          return null;
+        }
         pending = null;
         return p;
       },
@@ -204,10 +212,150 @@ describe('WhatsappService', () => {
           total_amount: 0,
         },
       ],
+      overall_transcript: 'Baba Sola mu peak milk meji',
     });
     await service.handleMessage({ id: 'w2', from: phone, type: 'text', text: { body: 'Baba Sola mu peak milk meji' } });
     expect(api.sendButtons).not.toHaveBeenCalled();
     expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('I no hear the price'));
-    expect(pending).toBeNull();
+    // Nothing to save, but what was heard is kept so "na 1800" can fix it.
+    expect(pending.interpretation.transactions).toEqual([]);
+  });
+
+  describe('corrections by reply', () => {
+    const kamauSale = {
+      transactions: [
+        {
+          intent: VoiceIntent.CREDIT_SALE,
+          resolvedCustomer: { name: 'Kamau', customerId: 'c1', isNew: false, isAmbiguous: false },
+          items: [{ product_name: 'Peak Milk', quantity: 2, unit_price: 800 }],
+          total_amount: 1600,
+          amount: 1600,
+        },
+      ],
+      overall_transcript: 'Kamau buy 2 peak milk for 1600',
+    };
+    const mamaPending = () => ({
+      phone,
+      userId: 'user-1',
+      sourceMessageId: 'v1',
+      interpretation: {
+        overall_transcript: 'Mama buy 2 pig milk for 1600',
+        transactions: [{ intent: VoiceIntent.CREDIT_SALE, resolvedCustomer: { name: 'Mama', isNew: true } }],
+      },
+    });
+
+    it('fixes the waiting entry from a typed reply and asks again', async () => {
+      pending = mamaPending();
+      voiceService.reviseTranscript.mockResolvedValue({
+        action: 'correct',
+        transcript: 'Kamau buy 2 peak milk for 1600',
+      });
+      voiceService.processTranscript.mockResolvedValue(kamauSale);
+
+      await service.handleMessage({
+        id: 'c1',
+        from: phone,
+        type: 'text',
+        text: { body: "No, peak milk and the name is not mama, it's Kamau" },
+      });
+
+      expect(voiceService.reviseTranscript).toHaveBeenCalledWith(
+        'Mama buy 2 pig milk for 1600',
+        "No, peak milk and the name is not mama, it's Kamau",
+        'user-1',
+      );
+      expect(voiceService.processTranscript).toHaveBeenCalledWith(
+        { transcript: 'Kamau buy 2 peak milk for 1600' },
+        'user-1',
+      );
+      const [, body] = api.sendButtons.mock.calls[0];
+      expect(body).toContain('Okay, I don change am');
+      expect(body).toContain('Kamau owes ₦1,600 for 2 × Peak Milk');
+      expect(transactionsService.create).not.toHaveBeenCalled(); // never saves on its own
+      expect(pending.sourceMessageId).toBe('c1');
+    });
+
+    it('fixes the waiting entry from a voice note too', async () => {
+      pending = mamaPending();
+      api.downloadMedia.mockResolvedValue({ buffer: Buffer.from('ogg'), mimetype: 'audio/ogg' });
+      voiceService.processAudio.mockResolvedValue({ transactions: [], overall_transcript: 'no be Mama, na Kamau' });
+      voiceService.reviseTranscript.mockResolvedValue({
+        action: 'correct',
+        transcript: 'Kamau buy 2 pig milk for 1600',
+      });
+      voiceService.processTranscript.mockResolvedValue(kamauSale);
+
+      await service.handleMessage({ id: 'c2', from: phone, type: 'audio', audio: { id: 'media-2' } });
+
+      expect(voiceService.reviseTranscript).toHaveBeenCalledWith(
+        'Mama buy 2 pig milk for 1600',
+        'no be Mama, na Kamau',
+        'user-1',
+      );
+      expect(api.sendButtons).toHaveBeenCalled();
+    });
+
+    it('asks one question when the reply is unclear and keeps the entry', async () => {
+      pending = mamaPending();
+      voiceService.reviseTranscript.mockResolvedValue({
+        action: 'unclear',
+        question: 'Wetin I go change?',
+      });
+      await service.handleMessage({ id: 'c3', from: phone, type: 'text', text: { body: 'e no correct' } });
+      expect(api.sendText).toHaveBeenCalledWith(phone, 'Wetin I go change?');
+      expect(pending.sourceMessageId).toBe('v1');
+    });
+
+    it('treats a different sale as a new entry and says the old one was not saved', async () => {
+      pending = mamaPending();
+      voiceService.reviseTranscript.mockResolvedValue({ action: 'new' });
+      voiceService.processTranscript.mockResolvedValue(creditSale);
+      await service.handleMessage({ id: 'c4', from: phone, type: 'text', text: { body: 'Gani buy 3 akara 900' } });
+      const [, body] = api.sendButtons.mock.calls[0];
+      expect(body).toContain('I no save the one before');
+      expect(body).toContain('Gani (new customer) owes ₦900');
+    });
+
+    it('treats the reply as new if the correction check fails', async () => {
+      pending = mamaPending();
+      voiceService.reviseTranscript.mockRejectedValue(new Error('groq down'));
+      voiceService.processTranscript.mockResolvedValue(creditSale);
+      await service.handleMessage({ id: 'c5', from: phone, type: 'text', text: { body: 'Gani buy 3 akara 900' } });
+      expect(voiceService.processTranscript).toHaveBeenCalledWith({ transcript: 'Gani buy 3 akara 900' }, 'user-1');
+      expect(api.sendButtons).toHaveBeenCalled();
+    });
+
+    it('a price reply completes a sale that had no price', async () => {
+      pending = {
+        phone,
+        userId: 'user-1',
+        sourceMessageId: 'v2',
+        interpretation: { overall_transcript: 'Baba Sola mu indomie meji', transactions: [] },
+      };
+      voiceService.reviseTranscript.mockResolvedValue({
+        action: 'correct',
+        transcript: 'Baba Sola mu indomie meji, 1800 total',
+      });
+      voiceService.processTranscript.mockResolvedValue(creditSale);
+      await service.handleMessage({ id: 'c6', from: phone, type: 'text', text: { body: 'na 1800' } });
+      expect(voiceService.processTranscript).toHaveBeenCalledWith(
+        { transcript: 'Baba Sola mu indomie meji, 1800 total' },
+        'user-1',
+      );
+      expect(api.sendButtons).toHaveBeenCalled();
+    });
+
+    it('"yes" while only a price question is waiting saves nothing and keeps it', async () => {
+      pending = {
+        phone,
+        userId: 'user-1',
+        sourceMessageId: 'v3',
+        interpretation: { overall_transcript: 'Baba Sola mu indomie meji', transactions: [] },
+      };
+      await service.handleMessage({ id: 'c7', from: phone, type: 'text', text: { body: 'yes' } });
+      expect(transactionsService.create).not.toHaveBeenCalled();
+      expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('Nothing is ready to save yet'));
+      expect(pending).not.toBeNull();
+    });
   });
 });
