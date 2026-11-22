@@ -89,6 +89,7 @@ export class WhatsappService {
     for (const entry of payload?.entry ?? []) {
       for (const change of entry?.changes ?? []) {
         messages.push(...(change?.value?.messages ?? []));
+        this.logFailedDeliveries(change?.value?.statuses ?? []);
       }
     }
     for (const message of messages) {
@@ -105,6 +106,22 @@ export class WhatsappService {
           )
           .catch(() => undefined);
       }
+    }
+  }
+
+  /**
+   * Meta accepts a reply first and reports delivery later. A reply that was
+   * accepted but never reached the phone only shows up here.
+   */
+  private logFailedDeliveries(statuses: any[]): void {
+    for (const status of statuses) {
+      if (status?.status !== 'failed') continue;
+      const reasons = (status.errors ?? [])
+        .map((e: any) => `${e.code} ${e.title}${e.error_data?.details ? `: ${e.error_data.details}` : ''}`)
+        .join('; ');
+      this.logger.error(
+        `[WhatsApp] reply ${status.id} to ${status.recipient_id} was not delivered: ${reasons || 'no reason given'}`,
+      );
     }
   }
 

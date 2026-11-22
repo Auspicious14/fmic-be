@@ -779,4 +779,32 @@ describe('WhatsappService', () => {
       expect(api.sendButtons).toHaveBeenCalled();
     });
   });
+
+  it('logs replies that Meta accepted but could not deliver', async () => {
+    const logError = jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
+    await service.handleWebhook({
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                statuses: [
+                  { id: 'wamid.ok', status: 'delivered', recipient_id: phone },
+                  {
+                    id: 'wamid.bad',
+                    status: 'failed',
+                    recipient_id: phone,
+                    errors: [{ code: 131026, title: 'Message undeliverable', error_data: { details: 'x' } }],
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(logError.mock.calls[0][0]).toContain('wamid.bad');
+    expect(logError.mock.calls[0][0]).toContain('131026 Message undeliverable: x');
+  });
 });

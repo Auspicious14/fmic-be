@@ -188,5 +188,8 @@ export class WhatsappApiService {
       this.logger.error(`[WhatsApp] send failed ${response.status}: ${detail}`);
       throw new Error(`WhatsApp send failed (${response.status})`);
     }
+    // The id lets a later "not delivered" status be matched to this reply.
+    const sent: any = await response.json().catch(() => ({}));
+    this.logger.log(`[WhatsApp] sent ${String(message.type)} ${sent?.messages?.[0]?.id ?? ''}`);
   }
 }
