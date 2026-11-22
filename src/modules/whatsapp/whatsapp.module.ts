@@ -12,6 +12,8 @@ import {
   WhatsappPendingSchema,
   WhatsappSeen,
   WhatsappSeenSchema,
+  WhatsappSignup,
+  WhatsappSignupSchema,
 } from './schemas/whatsapp.schema';
 
 @Module({
@@ -23,6 +25,7 @@ import {
       { name: User.name, schema: UserSchema },
       { name: WhatsappPending.name, schema: WhatsappPendingSchema },
       { name: WhatsappSeen.name, schema: WhatsappSeenSchema },
+      { name: WhatsappSignup.name, schema: WhatsappSignupSchema },
     ]),
   ],
   controllers: [WhatsappController],

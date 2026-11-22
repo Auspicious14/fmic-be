@@ -33,6 +33,14 @@ export class User {
 
   @Prop()
   payoutAccountName?: string;
+
+  /** WhatsApp bot also replies with a voice note ("voice off" turns it off). */
+  @Prop({ default: true })
+  voiceReplies?: boolean;
+
+  /** 'whatsapp' for shops that signed up in the chat (no web password yet). */
+  @Prop()
+  signupSource?: string;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

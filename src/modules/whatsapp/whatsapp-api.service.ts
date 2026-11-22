@@ -55,13 +55,57 @@ export class WhatsappApiService {
     });
   }
 
+  /**
+   * Blue ticks plus the "typing…" bubble on the trader's message while we
+   * work. WhatsApp clears it when we reply, or after 25 seconds.
+   */
+  async showTyping(messageId: string): Promise<void> {
+    const phoneNumberId = this.configService.get<string>('WHATSAPP_PHONE_NUMBER_ID');
+    const response = await fetch(`${this.baseUrl}/${phoneNumberId}/messages`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        status: 'read',
+        message_id: messageId,
+        typing_indicator: { type: 'text' },
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) {
+      throw new Error(`WhatsApp typing indicator failed (${response.status})`);
+    }
+  }
+
   /** Uploads an image (e.g. a receipt PNG) and sends it with a caption. */
   async sendImage(to: string, png: Buffer, caption: string): Promise<void> {
+    const mediaId = await this.uploadMedia(png, 'image/png', 'receipt.png');
+    await this.send(to, {
+      type: 'image',
+      image: { id: mediaId, caption: caption.slice(0, 1024) },
+    });
+  }
+
+  /** Sends an OGG/Opus clip so it shows as a voice note, not a file. */
+  async sendVoice(to: string, ogg: Buffer): Promise<void> {
+    const mediaId = await this.uploadMedia(ogg, 'audio/ogg', 'ledga.ogg');
+    try {
+      await this.send(to, { type: 'audio', audio: { id: mediaId, voice: true } });
+    } catch {
+      // Older API versions don't know "voice"; it still plays as audio.
+      await this.send(to, { type: 'audio', audio: { id: mediaId } });
+    }
+  }
+
+  private async uploadMedia(data: Buffer, type: string, filename: string): Promise<string> {
     const phoneNumberId = this.configService.get<string>('WHATSAPP_PHONE_NUMBER_ID');
     const form = new FormData();
     form.append('messaging_product', 'whatsapp');
-    form.append('type', 'image/png');
-    form.append('file', new Blob([new Uint8Array(png)], { type: 'image/png' }), 'receipt.png');
+    form.append('type', type);
+    form.append('file', new Blob([new Uint8Array(data)], { type }), filename);
     const upload = await fetch(`${this.baseUrl}/${phoneNumberId}/media`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${this.token}` },
@@ -72,10 +116,7 @@ export class WhatsappApiService {
     if (!upload.ok || !media?.id) {
       throw new Error(`WhatsApp media upload failed (${upload.status})`);
     }
-    await this.send(to, {
-      type: 'image',
-      image: { id: media.id, caption: caption.slice(0, 1024) },
-    });
+    return String(media.id);
   }
 
   /**

@@ -11,7 +11,27 @@ describe('WhatsappService', () => {
     sendText: jest.fn(),
     sendButtons: jest.fn(),
     sendImage: jest.fn(),
+    sendVoice: jest.fn(),
+    showTyping: jest.fn(async () => undefined),
     downloadMedia: jest.fn(),
+  };
+  let signup: any;
+  let voicePrefs: any;
+  const signupModel = {
+    findOne: jest.fn(() => ({ exec: async () => signup })),
+    create: jest.fn(async (doc: any) => {
+      signup = { ...doc };
+    }),
+    updateOne: jest.fn((_q: any, update: any) => ({
+      exec: async () => {
+        signup = { ...signup, ...update };
+      },
+    })),
+    deleteOne: jest.fn(() => ({
+      exec: async () => {
+        signup = null;
+      },
+    })),
   };
   const receiptImageService = { render: jest.fn() };
   const ledgerQueryService = {
@@ -24,6 +44,7 @@ describe('WhatsappService', () => {
     processAudio: jest.fn(),
     processTranscript: jest.fn(),
     reviseTranscript: jest.fn(),
+    speak: jest.fn(async () => null as Buffer | null),
   };
   const customersService = { create: jest.fn(), findOne: jest.fn() };
   const transactionsService = { create: jest.fn(), getDailySummary: jest.fn() };
@@ -39,7 +60,9 @@ describe('WhatsappService', () => {
 
   const userModel = {
     findOne: jest.fn(() => ({ exec: async () => linkedUser })),
+    findById: jest.fn(() => ({ select: () => ({ lean: () => ({ exec: async () => voicePrefs }) }) })),
     updateOne: jest.fn(() => ({ exec: async () => ({}) })),
+    create: jest.fn(async (doc: any) => doc),
   };
   const pendingModel = {
     findOne: jest.fn(() => ({ exec: async () => pending })),
@@ -82,6 +105,7 @@ describe('WhatsappService', () => {
     seenModel as any,
     receiptImageService as any,
     ledgerQueryService as any,
+    signupModel as any,
   );
 
   const creditSale = {
@@ -102,15 +126,34 @@ describe('WhatsappService', () => {
     jest.clearAllMocks();
     linkedUser = user;
     pending = null;
+    signup = null;
+    voicePrefs = { voiceReplies: true };
     receiptImageService.render.mockResolvedValue(null);
     process.env.BACKEND_API_URL = 'https://api.example.com';
   });
 
-  it('tells an unknown number how to link their shop', async () => {
+  it('welcomes an unknown number and asks for their name and shop', async () => {
     linkedUser = null;
     await service.handleMessage({ id: 'm1', from: phone, type: 'text', text: { body: 'hi' } });
-    expect(api.sendText).toHaveBeenCalledWith(phone, expect.stringContaining('Settings → WhatsApp'));
+    const welcome = api.sendText.mock.calls[0][1];
+    expect(welcome).toContain('Welcome to Ledga');
+    expect(welcome).toContain('"Bisi, Bisi Provisions"');
+    expect(welcome).toContain('Settings → WhatsApp');
+    expect(signup).toEqual({ phone });
     expect(voiceService.processTranscript).not.toHaveBeenCalled();
+  });
+
+  it('shows "typing…" on the trader\'s message straight away', async () => {
+    voiceService.processTranscript.mockResolvedValue(creditSale);
+    await service.handleMessage({ id: 't1', from: phone, type: 'text', text: { body: 'Gani buy akara 900' } });
+    expect(api.showTyping).toHaveBeenCalledWith('t1');
+  });
+
+  it('carries on if the typing indicator fails', async () => {
+    api.showTyping.mockRejectedValueOnce(new Error('400'));
+    voiceService.processTranscript.mockResolvedValue(creditSale);
+    await service.handleMessage({ id: 't2', from: phone, type: 'text', text: { body: 'Gani buy akara 900' } });
+    expect(api.sendButtons).toHaveBeenCalled();
   });
 
   it('turns a voice note into a ✅/❌ question', async () => {
@@ -122,6 +165,7 @@ describe('WhatsappService', () => {
     expect(voiceService.processAudio).toHaveBeenCalledWith(
       { buffer: Buffer.from('ogg'), mimetype: 'audio/ogg' },
       'user-1',
+      { skipTts: true },
     );
     const [, body, buttons] = api.sendButtons.mock.calls[0];
     expect(body).toContain('Gani (new customer) owes ₦900 for 3 × akara');
@@ -635,6 +679,104 @@ describe('WhatsappService', () => {
       });
 
       expect(api.sendText.mock.calls.at(-1)[1]).toContain('Tell customers where to pay you');
+    });
+  });
+
+  describe('signing up in the chat', () => {
+    beforeEach(() => {
+      linkedUser = null;
+      signup = { phone };
+    });
+
+    it('"Bisi, Bisi Provisions" creates the shop and shows how to use Ledga', async () => {
+      await service.handleMessage({ id: 's1', from: phone, type: 'text', text: { body: 'Bisi, Bisi Provisions' } });
+      expect(userModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Bisi',
+          shopName: 'Bisi Provisions',
+          whatsappPhone: phone,
+          email: `wa-${phone}@whatsapp.ledga.app`,
+          signupSource: 'whatsapp',
+        }),
+      );
+      expect(signup).toBeNull();
+      expect(api.sendText.mock.calls[0][1]).toContain('You don join Ledga, Bisi!');
+      expect(api.sendText.mock.calls[0][1]).toContain('Welcome to Ledga for Bisi Provisions');
+    });
+
+    it('asks for the shop name when only a name is given', async () => {
+      await service.handleMessage({ id: 's2', from: phone, type: 'text', text: { body: 'My name is Bisi' } });
+      expect(api.sendText).toHaveBeenCalledWith(phone, 'Nice to meet you, Bisi! Wetin be your shop name?');
+      expect(userModel.create).not.toHaveBeenCalled();
+
+      await service.handleMessage({ id: 's3', from: phone, type: 'text', text: { body: 'Bisi Provisions' } });
+      expect(userModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Bisi', shopName: 'Bisi Provisions' }),
+      );
+    });
+
+    it('does not take "hi" as a name', async () => {
+      await service.handleMessage({ id: 's4', from: phone, type: 'text', text: { body: 'hi' } });
+      expect(userModel.create).not.toHaveBeenCalled();
+      expect(signupModel.updateOne).not.toHaveBeenCalled();
+      expect(api.sendText.mock.calls[0][1]).toContain('type your name and shop name');
+    });
+
+    it('asks for text if a voice note comes before sign-up', async () => {
+      await service.handleMessage({ id: 's5', from: phone, type: 'audio', audio: { id: 'media-9' } });
+      expect(voiceService.processAudio).not.toHaveBeenCalled();
+      expect(api.sendText.mock.calls[0][1]).toContain('type your name and shop name');
+    });
+  });
+
+  describe('voice replies', () => {
+    const ogg = Buffer.from('ogg');
+
+    it('reads the summary aloud after the ✅/❌ question', async () => {
+      voiceService.speak.mockResolvedValue(ogg);
+      voiceService.processTranscript.mockResolvedValue(creditSale);
+      await service.handleMessage({ id: 'v1', from: phone, type: 'text', text: { body: 'Gani buy akara 900' } });
+      expect(voiceService.speak).toHaveBeenCalledWith('Gani owe 900 naira for 3 akara. Make I save am?');
+      expect(api.sendVoice).toHaveBeenCalledWith(phone, ogg);
+    });
+
+    it('says the new balance after saving', async () => {
+      voiceService.speak.mockResolvedValue(ogg);
+      pending = { phone, userId: 'user-1', sourceMessageId: 'v2', interpretation: creditSale };
+      customersService.create.mockResolvedValue({ _id: { toString: () => 'cust-1' } });
+      transactionsService.create.mockResolvedValue({ _id: { toString: () => 'tx-1' } });
+      customersService.findOne.mockResolvedValue({ name: 'Gani', phone: '', outstandingBalance: 900 });
+      await service.handleMessage({
+        id: 'v3',
+        from: phone,
+        type: 'interactive',
+        interactive: { button_reply: { id: 'ledga_confirm' } },
+      });
+      expect(voiceService.speak).toHaveBeenCalledWith('I don save am. Gani now owe 900 naira.');
+    });
+
+    it('stays quiet when the trader turned voice off', async () => {
+      voicePrefs = { voiceReplies: false };
+      voiceService.processTranscript.mockResolvedValue(creditSale);
+      await service.handleMessage({ id: 'v4', from: phone, type: 'text', text: { body: 'Gani buy akara 900' } });
+      expect(voiceService.speak).not.toHaveBeenCalled();
+      expect(api.sendButtons).toHaveBeenCalled();
+    });
+
+    it('"voice off" and "voice on" switch it', async () => {
+      await service.handleMessage({ id: 'v5', from: phone, type: 'text', text: { body: 'Voice off' } });
+      expect(userModel.updateOne).toHaveBeenCalledWith({ _id: user._id }, { voiceReplies: false });
+      await service.handleMessage({ id: 'v6', from: phone, type: 'text', text: { body: 'voice on' } });
+      expect(userModel.updateOne).toHaveBeenCalledWith({ _id: user._id }, { voiceReplies: true });
+      expect(voiceService.processTranscript).not.toHaveBeenCalled();
+    });
+
+    it('a failed voice reply never breaks the text reply', async () => {
+      voiceService.speak.mockResolvedValue(ogg);
+      api.sendVoice.mockRejectedValueOnce(new Error('upload failed'));
+      voiceService.processTranscript.mockResolvedValue(creditSale);
+      await service.handleMessage({ id: 'v7', from: phone, type: 'text', text: { body: 'Gani buy akara 900' } });
+      expect(api.sendButtons).toHaveBeenCalled();
     });
   });
 });

@@ -41,12 +41,15 @@ export class VoiceService {
   async processAudio(
     file: { buffer: Buffer; mimetype: string },
     userId: string,
+    // WhatsApp sends its own voice note, so it skips the web app's WAV reply.
+    options: { skipTts?: boolean } = {},
   ): Promise<VoiceOutputDto> {
     try {
-      const processedAudio =
-        await this.audioPreprocessorService.preprocess(file);
-      const products = await this.productsService.findAll(userId);
-      const { customers } = await this.customersService.findAll(userId);
+      const [processedAudio, products, { customers }] = await Promise.all([
+        this.audioPreprocessorService.preprocess(file),
+        this.productsService.findAll(userId),
+        this.customersService.findAll(userId),
+      ]);
       const shopContext = buildShopContextBlock(customers, products);
 
       let transcript = '';
@@ -147,7 +150,7 @@ export class VoiceService {
       const confirmationText = result.transactions[0]?.voice_confirmation ?? '';
 
       let confirmationAudio: string | null = null;
-      if (confirmationText) {
+      if (confirmationText && !options.skipTts) {
         try {
           confirmationAudio = await this.kokoroService.generateTTS(
             confirmationText,
@@ -188,8 +191,10 @@ export class VoiceService {
     const { transcript } = processVoiceDto;
 
     // 1. Gather context so the LLM can use real customer/product spellings
-    const products = await this.productsService.findAll(userId);
-    const { customers } = await this.customersService.findAll(userId);
+    const [products, { customers }] = await Promise.all([
+      this.productsService.findAll(userId),
+      this.customersService.findAll(userId),
+    ]);
     const shopContext = buildShopContextBlock(customers, products);
 
     // 2. NLU with Groq Llama 3.3 70B - returns multiple transactions
@@ -204,6 +209,18 @@ export class VoiceService {
       userId,
       customers,
     );
+  }
+
+  /** A short Pidgin voice note (OGG/Opus) for WhatsApp, or null if TTS is off or fails. */
+  async speak(text: string): Promise<Buffer | null> {
+    if (!text.trim() || !this.spitchService.isEnabled()) return null;
+    try {
+      const base64 = await this.spitchService.generateSpeech(text, 'pcm-NG', 'ogg_opus');
+      return Buffer.from(base64, 'base64');
+    } catch (error) {
+      this.logger.warn(`[VoiceService] voice reply failed: ${(error as Error).message}`);
+      return null;
+    }
   }
 
   /**

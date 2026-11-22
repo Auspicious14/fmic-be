@@ -94,8 +94,15 @@ export class SpitchService {
     return candidates;
   }
 
-  /** Returns base64 WAV in a Nigerian voice. `lang` is 'yo-NG' or 'pcm-NG'. */
-  async generateSpeech(text: string, lang: string): Promise<string> {
+  /**
+   * Returns base64 audio in a Nigerian voice. `lang` is 'yo-NG' or 'pcm-NG'.
+   * WAV for the browser; 'ogg_opus' for WhatsApp voice notes.
+   */
+  async generateSpeech(
+    text: string,
+    lang: string,
+    format: 'wav' | 'ogg_opus' = 'wav',
+  ): Promise<string> {
     if (!this.apiKey) throw new Error('SPITCH_API_KEY is not set');
     const isYoruba = lang.startsWith('yo');
     // If the Pidgin code is ever rejected, the Pidgin voice reads it as English.
@@ -109,13 +116,13 @@ export class SpitchService {
           headers: {
             Authorization: `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
-            Accept: 'audio/wav',
+            Accept: format === 'wav' ? 'audio/wav' : 'audio/ogg',
           },
           body: JSON.stringify({
             text,
             language,
             voice: this.voiceFor(isYoruba ? 'yo' : 'pi'),
-            format: 'wav',
+            format,
           }),
           signal: AbortSignal.timeout(this.timeoutMs),
         });

@@ -27,6 +27,24 @@ export class WhatsappPending {
 export type WhatsappPendingDocument = WhatsappPending & Document;
 export const WhatsappPendingSchema = SchemaFactory.createForClass(WhatsappPending);
 
+/**
+ * A new number signing up in the chat. Holds the name until the shop name
+ * arrives; expires after a day so a half-finished sign-up starts over.
+ */
+@Schema({ collection: 'whatsapp_signups' })
+export class WhatsappSignup {
+  @Prop({ required: true, unique: true })
+  phone: string;
+
+  @Prop()
+  name?: string;
+
+  @Prop({ default: () => new Date(), expires: 60 * 60 * 24 })
+  createdAt: Date;
+}
+export type WhatsappSignupDocument = WhatsappSignup & Document;
+export const WhatsappSignupSchema = SchemaFactory.createForClass(WhatsappSignup);
+
 /** Message ids already handled; Meta can deliver the same webhook twice. */
 @Schema({ collection: 'whatsapp_seen' })
 export class WhatsappSeen {

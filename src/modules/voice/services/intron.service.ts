@@ -23,6 +23,7 @@ export class IntronService {
   private readonly baseUrl: string;
   private readonly languages: IntronLanguage[];
   private readonly timeoutMs: number;
+  private readonly graceMs: number;
   private readonly disableLlmCorrections: boolean;
 
   constructor(private readonly configService: ConfigService) {
@@ -38,6 +39,9 @@ export class IntronService {
       .split(',')
       .map((l) => l.trim())
       .filter((l): l is IntronLanguage => ['yo', 'pcm', 'en'].includes(l));
+    this.graceMs = Number(
+      this.configService.get<string>('INTRON_GRACE_MS') || 2500,
+    );
     this.timeoutMs = Number(
       this.configService.get<string>('INTRON_TIMEOUT_MS') || 25000,
     );
@@ -59,19 +63,48 @@ export class IntronService {
   ): Promise<AsrCandidate[]> {
     if (!this.apiKey) throw new Error('INTRON_API_KEY is not set');
 
-    const results = await Promise.allSettled(
-      this.languages.map((language) => this.transcribe(audio, mimeType, language)),
+    // The models run in parallel. Once one has answered, the others get
+    // INTRON_GRACE_MS more (default 2.5s) instead of holding up the reply.
+    const results: Array<{ text?: string; error?: Error } | undefined> = [];
+    const tasks = this.languages.map((language, index) =>
+      this.transcribe(audio, mimeType, language).then(
+        (text) => {
+          results[index] = { text };
+        },
+        (error: Error) => {
+          results[index] = { error };
+        },
+      ),
     );
+    const allDone = Promise.all(tasks);
+    await Promise.race([
+      allDone,
+      new Promise<void>((resolve) =>
+        tasks.forEach((task, index) =>
+          task.then(() => {
+            if (results[index]?.text?.trim()) resolve();
+          }),
+        ),
+      ),
+    ]);
+    let graceTimer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      allDone,
+      new Promise<void>((resolve) => {
+        graceTimer = setTimeout(resolve, this.graceMs);
+      }),
+    ]);
+    clearTimeout(graceTimer);
 
     const candidates: AsrCandidate[] = [];
-    results.forEach((result, index) => {
-      const language = this.languages[index];
-      if (result.status === 'fulfilled' && result.value.trim()) {
-        candidates.push({ text: result.value.trim(), confidence: 0.85, language });
-      } else if (result.status === 'rejected') {
-        this.logger.warn(
-          `[Intron] ASR ${language} failed: ${(result.reason as Error).message}`,
-        );
+    this.languages.forEach((language, index) => {
+      const result = results[index];
+      if (result?.text?.trim()) {
+        candidates.push({ text: result.text.trim(), confidence: 0.85, language });
+      } else if (result?.error) {
+        this.logger.warn(`[Intron] ASR ${language} failed: ${result.error.message}`);
+      } else if (!result) {
+        this.logger.warn(`[Intron] ASR ${language} too slow, went ahead without it`);
       }
     });
 

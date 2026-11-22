@@ -55,6 +55,30 @@ describe('IntronService', () => {
     expect(candidates).toEqual([{ text: 'Gani collect akara', confidence: 0.85, language: 'pcm' }]);
   });
 
+  it('does not wait long for a slow model once another has answered', async () => {
+    fetchMock.mockImplementation(async (_url: string, init: any) =>
+      (init.body as FormData).get('use_language_asr_input') === 'yo'
+        ? new Promise<Response>((resolve) => setTimeout(() => resolve(ok('late')), 2000))
+        : ok('Alfa buy two rice'),
+    );
+    const service = new IntronService(config({ INTRON_API_KEY: 'k', INTRON_GRACE_MS: '50' }));
+    const started = Date.now();
+    const candidates = await service.transcribeCandidates(Buffer.from('x'), 'audio/ogg');
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(candidates).toEqual([{ text: 'Alfa buy two rice', confidence: 0.85, language: 'pcm' }]);
+  });
+
+  it('still uses a slower model if it answers within the grace time', async () => {
+    fetchMock.mockImplementation(async (_url: string, init: any) =>
+      (init.body as FormData).get('use_language_asr_input') === 'yo'
+        ? new Promise<Response>((resolve) => setTimeout(() => resolve(ok('Alfa ra iresi')), 30))
+        : ok('Alfa buy two rice'),
+    );
+    const service = new IntronService(config({ INTRON_API_KEY: 'k', INTRON_GRACE_MS: '500' }));
+    const candidates = await service.transcribeCandidates(Buffer.from('x'), 'audio/ogg');
+    expect(candidates.map((c) => c.language)).toEqual(['pcm', 'yo']);
+  });
+
   it('fails when every language fails, so the next provider is tried', async () => {
     fetchMock.mockResolvedValue(new Response('bad', { status: 401 }));
     const service = new IntronService(config({ INTRON_API_KEY: 'k' }));
