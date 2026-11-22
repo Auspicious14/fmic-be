@@ -1,0 +1,29 @@
+# Free Hugging Face Spaces go to sleep after a while without visits, and the
+# first voice note after that waits for a cold start. Ledga uses the Space only
+# as the last speech-to-text fallback, but it should answer fast when needed.
+#
+# Setup: GitHub repo → Settings → Secrets and variables → Actions →
+# New repository secret: HF_SPACE_URL = the same value as on Vercel.
+name: Keep Hugging Face Space awake
+
+on:
+  schedule:
+    - cron: '17 */6 * * *' # every 6 hours
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping the Space
+        env:
+          HF_SPACE_URL: ${{ secrets.HF_SPACE_URL }}
+        run: |
+          if [ -z "$HF_SPACE_URL" ]; then
+            echo "HF_SPACE_URL secret is not set; nothing to ping."
+            exit 0
+          fi
+          # A cold Space can take a minute or two to wake; don't fail the run over it.
+          curl -sS -o /dev/null -w "Space answered %{http_code} in %{time_total}s\n" \
+            --max-time 180 "$HF_SPACE_URL/health" || echo "Space did not answer this time"
